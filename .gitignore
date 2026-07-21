@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+venv/
+
+# VSCode
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large data
+data/raw/
+data/tiles/
+outputs/
+
+# Mac/Linux
+.DS_Store
+
+# Windows
+Thumbs.db
