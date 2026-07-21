@@ -15,6 +15,7 @@ venv/
 # Large data
 data/raw/
 data/tiles/
+data/metadata/
 outputs/
 
 # Mac/Linux
