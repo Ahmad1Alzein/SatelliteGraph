@@ -17,39 +17,48 @@ def test_stage1():
     assert len(tif_files) > 0, \
         "No TIFF images found in data/raw"
 
-    tif = tif_files[0]
+    for tif in tif_files:
+    
+            print()
+    
+            print("Loading:", tif.name)
+    
+            image, profile = load_tif(tif)
+    
+            print("Image shape:", image.shape)
+    
+            tile_image(
+    
+                image=image,
+    
+                image_name=tif.stem,
+    
+                tile_size=TILE_SIZE,
+    
+                stride=STRIDE,
+    
+                tiles_dir=TILES_DIR,
+    
+                metadata_dir=METADATA_DIR
+    
+            )
 
-    print(f"\nLoading {tif.name}")
+            metadata = METADATA_DIR / f"{tif.stem}.csv"
 
-    image, profile = load_tif(tif)
+            assert metadata.exists(), \
+                "Metadata CSV was not generated."
 
-    print("Image shape:", image.shape)
+            tiles_folder = TILES_DIR / tif.stem
 
-    tile_image(
-        image=image,
-        image_name=tif.stem,
-        tile_size=TILE_SIZE,
-        stride=STRIDE,
-        tiles_dir=TILES_DIR,
-        metadata_dir=METADATA_DIR,
-    )
+            assert tiles_folder.exists(), \
+                "Tiles folder was not created."
 
-    metadata = METADATA_DIR / f"{tif.stem}.csv"
+            tiles = list(tiles_folder.glob("*.png"))
 
-    assert metadata.exists(), \
-        "Metadata CSV was not generated."
+            assert len(tiles) > 0, \
+                "No image tiles were generated."
 
-    tiles_folder = TILES_DIR / tif.stem
-
-    assert tiles_folder.exists(), \
-        "Tiles folder was not created."
-
-    tiles = list(tiles_folder.glob("*.png"))
-
-    assert len(tiles) > 0, \
-        "No image tiles were generated."
-
-    print(f"\n✓ Generated {len(tiles)} tiles")
+            print(f"\n✓ Generated {len(tiles)} tiles")
     print("✓ Metadata file exists")
     print("✓ Stage 1 completed successfully")
 
