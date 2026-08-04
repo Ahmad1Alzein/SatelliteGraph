@@ -1,0 +1,110 @@
+# SatelliteGraph project and Stage 2 configuration.
+# Relative paths are resolved from the repository root.
+project:
+  paths:
+    data_directory: data
+    raw_directory: data/raw          # Put source <name>.tif here.
+    tiles_directory: data/tiles      # Stage 2 reads <name>/tile_XXXXX.png here.
+    metadata_directory: data/metadata # Stage 2 reads <name>.csv here.
+  tiling:
+    tile_size: 512
+    overlap: 50
+
+stage2:
+  instance_model:
+    backend: sam2
+    checkpoint: checkpoints/sam2/sam2.1_hiera_large.pt
+    model_type: sam2.1_hiera_large
+    # Hydra resource name inside the installed/vendored sam2 package.
+    model_config: configs/sam2.1/sam2.1_hiera_l.yaml
+    device: auto
+    mixed_precision: true
+    automatic_mask_generator:
+      points_per_side: 32
+      points_per_batch: 8
+      pred_iou_thresh: 0.82
+      stability_score_thresh: 0.90
+      stability_score_offset: 1.0
+      box_nms_thresh: 0.7
+      crop_n_layers: 1
+      crop_nms_thresh: 0.7
+      crop_overlap_ratio: 0.3413333333
+      crop_n_points_downscale_factor: 2
+      # Uses SAM 2's compiled cleanup when available, otherwise the runner's
+      # OpenCV CPU fallback (including native Windows).
+      min_mask_region_area: 40
+      output_mode: binary_mask
+      mask_threshold: 0.0
+      use_m2m: true
+      multimask_output: true
+
+  semantic_model:
+    backend: openearthmap_fasterseg
+    repository: third_party/oem-lightweight
+    architecture: checkpoints/openearthmap/fasterseg/arch_1.pt
+    checkpoint: checkpoints/openearthmap/fasterseg/weights1.pt
+    device: auto
+    inference:
+      input_size: 1024
+      use_tta: true
+      save_probabilities: true
+
+  preprocessing:
+    rgb_bands: [1, 2, 3]
+    normalization: percentile
+    lower_percentile: 2.0
+    upper_percentile: 98.0
+    fixed_range: null
+    nodata_fill: 0
+
+  filtering:
+    minimum_area: 40
+    maximum_area_ratio: 0.95
+    minimum_predicted_iou: null
+    minimum_stability_score: null
+    minimum_valid_pixel_fraction: 0.5
+    maximum_nodata_fraction: 0.5
+    minimum_fill_ratio: 0.01
+    border_policy: keep
+
+  deduplication:
+    mask_iou_threshold: 0.90
+    containment_threshold: 0.95
+    bbox_overlap_threshold: 0.0
+    area_similarity_threshold: 0.5
+    duplicate_policy: keep_higher_predicted_iou
+    nested_policy: remove_near_identical_only
+
+  coverage:
+    background_policy: leave_unassigned
+    minimum_background_component_area: 100
+
+  # Trees are treated like every other OpenEarthMap class. Low-confidence and
+  # below-minimum residual pixels become explicit unknown components, which is
+  # why the final valid-pixel coverage is always complete.
+  fusion:
+    minimum_sam_component_area: 40
+    semantic_confidence_threshold: 0.45
+    minimum_component_area:
+      bareland: 100
+      rangeland: 100
+      developed space: 80
+      road: 30
+      tree: 40
+      water: 80
+      agriculture land: 100
+      buildings: 20
+    fill_low_confidence_as_unknown: true
+
+  visualization:
+    alpha: 0.45
+    random_seed: 42
+    show_ids: false
+    show_scores: false
+
+  output:
+    root_directory: artifacts/stage2
+    save_raw_masks: true
+    save_rejected_masks: true
+    save_intermediate_previews: true
+    compressed_masks: true
