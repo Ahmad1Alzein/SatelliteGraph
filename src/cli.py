@@ -1,4 +1,4 @@
-"""Command-line entry point for the unified Stage 2 pipeline."""
+"""Command-line entry point for SatelliteGraph processing stages."""
 
 from __future__ import annotations
 
@@ -35,6 +35,128 @@ def parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="Disable the tqdm phase progress bar",
             )
+
+    refinement = commands.add_parser(
+        "refine",
+        help="Propose, review, apply, and validate reversible Stage 2 refinements",
+    )
+    refinement_phases = refinement.add_subparsers(dest="phase", required=True)
+    refinement_help = {
+        "propose": "Generate the checksum-bound human-review bundle",
+        "apply": "Apply human decisions or the configured workflow mode",
+        "auto": "Run one tile unattended with selective automatic decisions",
+        "validate": "Validate a completed refinement result",
+    }
+    for name in ("propose", "apply", "auto", "validate"):
+        command = refinement_phases.add_parser(name, help=refinement_help[name])
+        command.add_argument("--tile-id", required=True)
+        command.add_argument(
+            "--config",
+            default=str(DEFAULT_CONFIG),
+            help="Single project configuration (default: config.yaml)",
+        )
+        command.add_argument("--project-root", default=".")
+        command.add_argument(
+            "--no-progress",
+            action="store_true",
+            help="Disable the refinement progress bar",
+        )
+        if name == "apply":
+            command.add_argument(
+                "--decisions",
+                default=None,
+                help=(
+                    "Optional reviewed decisions JSON. When omitted, deterministic "
+                    "connectivity normalization and configured safe micro-unknown cleanup "
+                    "are applied."
+                ),
+            )
+            command.add_argument(
+                "--mode",
+                choices=("human_review", "automatic"),
+                default=None,
+                help="Decision provider (default: refinement.mode from config)",
+            )
+
+    refinement_batch = refinement_phases.add_parser(
+        "batch",
+        help="Generate review bundles or automatically refine many Stage 2 tiles",
+    )
+    refinement_batch.add_argument(
+        "--tile-id",
+        action="append",
+        dest="tile_ids",
+        default=None,
+        help="Tile to process; repeat for several. Omit to discover all complete tiles.",
+    )
+    refinement_batch.add_argument(
+        "--mode",
+        choices=("human_review", "automatic"),
+        default="automatic",
+        help="Automatic publishes results; human_review generates proposal bundles",
+    )
+    refinement_batch.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Bounded number of tiles processed concurrently (default: 1)",
+    )
+    refinement_batch.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess compatible completed automatic results instead of resuming",
+    )
+    refinement_batch.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop on the first failed tile instead of recording and continuing",
+    )
+    refinement_batch.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG),
+        help="Single project configuration (default: config.yaml)",
+    )
+    refinement_batch.add_argument("--project-root", default=".")
+    refinement_batch.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the batch progress bar",
+    )
+
+    stage3 = commands.add_parser(
+        "stage3",
+        help="Build one tile's segment-adjacency graph from the final Stage 2 result",
+    )
+    stage3_phases = stage3.add_subparsers(dest="phase", required=True)
+    stage3_run = stage3_phases.add_parser("run")
+    stage3_run.add_argument("--tile-id", required=True)
+    stage3_run.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG),
+        help="Single project configuration (default: config.yaml)",
+    )
+    stage3_run.add_argument("--project-root", default=".")
+    stage3_run.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the tqdm phase progress bar",
+    )
+    stage3_run.add_argument(
+        "--refine-first",
+        action="store_true",
+        help="Apply configured Stage 2 refinement immediately before building the graph",
+    )
+    stage3_run.add_argument(
+        "--refinement-decisions",
+        default=None,
+        help="Optional reviewed decisions JSON used with --refine-first",
+    )
+    stage3_run.add_argument(
+        "--refinement-mode",
+        choices=("human_review", "automatic"),
+        default=None,
+        help="Decision provider used with --refine-first (default: refinement.mode)",
+    )
     return root
 
 
@@ -42,19 +164,100 @@ def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
     project_root = Path(args.project_root).resolve()
     try:
-        if args.phase == "run":
-            result = run_stage2(
+        if args.stage == "stage2":
+            if args.phase == "run":
+                result = run_stage2(
+                    args.tile_id,
+                    project_root=project_root,
+                    config=args.config,
+                    show_progress=not args.no_progress,
+                ).summary()
+            else:
+                cfg = instance_config(load_config(args.config))
+                if args.phase == "check-model":
+                    result = PHASES[args.phase](cfg, project_root)
+                else:
+                    result = PHASES[args.phase](cfg, project_root, args.tile_id)
+        elif args.stage == "refine":
+            # Import lazily so Stage 1/2 commands do not initialize refinement.
+            from src.refinement import (
+                apply_refinement,
+                propose_refinement,
+                validate_refinement,
+            )
+
+            common = {
+                "project_root": project_root,
+                "config": args.config,
+                "show_progress": not args.no_progress,
+            }
+            if args.phase == "batch":
+                from src.refinement import run_refinement_batch
+
+                result = run_refinement_batch(
+                    args.tile_ids,
+                    workflow_mode=args.mode,
+                    workers=args.workers,
+                    resume=not args.force,
+                    continue_on_error=not args.fail_fast,
+                    **common,
+                ).summary()
+            elif args.phase == "propose":
+                result = propose_refinement(args.tile_id, **common).summary()
+            elif args.phase == "apply":
+                result = apply_refinement(
+                    args.tile_id,
+                    decisions=args.decisions,
+                    workflow_mode=args.mode,
+                    **common,
+                ).summary()
+            elif args.phase == "auto":
+                result = apply_refinement(
+                    args.tile_id,
+                    workflow_mode="automatic",
+                    **common,
+                ).summary()
+            else:
+                result = validate_refinement(args.tile_id, **common)
+        elif args.stage == "stage3":
+            # Import lazily so Stage 1/2 commands do not initialize Stage 3.
+            from src.stage3 import run_stage3
+
+            refinement_summary = None
+            if args.refinement_decisions is not None and not args.refine_first:
+                raise ValueError("--refinement-decisions requires --refine-first")
+            if args.refinement_mode is not None and not args.refine_first:
+                raise ValueError("--refinement-mode requires --refine-first")
+            if args.refine_first:
+                from src.refinement import apply_refinement
+
+                refinement_summary = apply_refinement(
+                    args.tile_id,
+                    project_root=project_root,
+                    config=args.config,
+                    decisions=args.refinement_decisions,
+                    workflow_mode=args.refinement_mode,
+                    show_progress=not args.no_progress,
+                ).summary()
+            graph_summary = run_stage3(
                 args.tile_id,
                 project_root=project_root,
                 config=args.config,
                 show_progress=not args.no_progress,
             ).summary()
-        else:
-            cfg = instance_config(load_config(args.config))
-            if args.phase == "check-model":
-                result = PHASES[args.phase](cfg, project_root)
-            else:
-                result = PHASES[args.phase](cfg, project_root, args.tile_id)
+            result = (
+                {
+                    "status": "complete",
+                    "refinement": refinement_summary,
+                    "stage3": graph_summary,
+                }
+                if refinement_summary is not None
+                else graph_summary
+            )
+        else:  # pragma: no cover - argparse restricts the available stages.
+            raise ValueError(f"Unsupported stage: {args.stage}")
     except Exception as exc:
-        raise SystemExit(f"stage2 {args.phase} failed: {type(exc).__name__}: {exc}") from exc
+        raise SystemExit(
+            f"{args.stage} {args.phase} failed: {type(exc).__name__}: {exc}"
+        ) from exc
     print(json.dumps(result, indent=2, default=str))

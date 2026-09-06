@@ -1,4 +1,4 @@
-# SatelliteGraph project and Stage 2 configuration.
+# SatelliteGraph project configuration for every processing stage.
 # Relative paths are resolved from the repository root.
 project:
   paths:
@@ -108,3 +108,224 @@ stage2:
     save_rejected_masks: true
     save_intermediate_previews: true
     compressed_masks: true
+
+# Stage 2R is a reversible refinement pass.  It never overwrites 12_final;
+# accepted corrections are replayed into the sibling 13_refinement directory.
+refinement:
+  configuration_version: "1.0"
+  # human_review: generate checksum-bound proposals and apply reviewer choices.
+  # automatic: finish unattended, applying only independently gated edits and
+  # preserving every abstained region unchanged.
+  mode: human_review
+  connectivity: 4
+
+  ontology:
+    bareland:
+      entity_type: homogeneous_region
+      policy: continuous_homogeneous_region
+      allow_merge: true
+      allow_split: true
+    rangeland:
+      entity_type: homogeneous_region
+      policy: continuous_homogeneous_region
+      allow_merge: true
+      allow_split: true
+    developed space:
+      entity_type: homogeneous_region
+      policy: continuous_homogeneous_region
+      allow_merge: true
+      allow_split: true
+    road:
+      entity_type: road_reach
+      policy: junction_to_junction
+      allow_merge: true
+      allow_split: true
+    tree:
+      entity_type: continuous_canopy
+      policy: continuous_canopy
+      allow_merge: true
+      allow_split: true
+    water:
+      entity_type: homogeneous_region
+      policy: continuous_homogeneous_region
+      allow_merge: true
+      allow_split: true
+    agriculture land:
+      entity_type: agricultural_field
+      policy: preserve_field_boundaries
+      allow_merge: true
+      allow_split: true
+    buildings:
+      entity_type: building_instance
+      policy: one_physical_building
+      allow_merge: true
+      allow_split: true
+    unknown:
+      entity_type: unresolved
+      policy: abstain
+      allow_merge: false
+      allow_split: false
+
+  operations:
+    connectivity_split:
+      enabled: true
+      auto_apply: true
+      # Components stay separate while evidence is evaluated. Secondary pieces
+      # through 40 pixels are then consolidated into the original object identity
+      # instead of becoming extra graph nodes.
+      minimum_component_area_pixels: 41
+    semantic_split:
+      enabled: true
+      auto_apply: false
+      minimum_segment_area_pixels: 64
+      minimum_child_area_pixels: 16
+      score_threshold: 0.98
+      stability_trials: 3
+    absorb:
+      enabled: true
+      auto_apply: false
+      maximum_segment_area_pixels: 40
+      score_threshold: 0.98
+      score_margin_threshold: 0.25
+      minimum_shared_boundary_fraction: 0.80
+    # Automatically remove only small unknown regions for which the saved
+    # semantic probabilities and a directly adjacent homogeneous class agree.
+    # Protected instance/network classes stay review-only.
+    unknown_cleanup:
+      enabled: true
+      auto_apply: true
+      maximum_segment_area_pixels: 40
+      allowed_target_classes:
+        - bareland
+        - rangeland
+        - developed space
+        - tree
+        - water
+      minimum_mean_target_probability: 0.60
+      minimum_probability_margin: 0.20
+      minimum_dominant_pixel_fraction: 0.90
+      minimum_shared_boundary_fraction: 0.50
+      minimum_weak_color_boundary_score: 0.70
+      minimum_region_mean_color_similarity: 0.55
+      require_not_tile_boundary: true
+    # Contextual contraction handles the remaining <=40-pixel unknown noise.
+    # It never targets another unknown, preserves strong standalone tree or
+    # building evidence, and applies extra road/field/building policy gates.
+    contextual_cleanup:
+      enabled: true
+      auto_apply: true
+      maximum_segment_area_pixels: 40
+      semantic_consensus_minimum_probability: 0.55
+      semantic_consensus_minimum_margin: 0.15
+      semantic_consensus_minimum_purity: 0.80
+      # Relative best-neighbor selection is not enough for unattended runs:
+      # require both an absolute energy ceiling and separation from runner-up.
+      maximum_selected_energy: 0.40
+      minimum_energy_margin: 0.02
+      standalone_tree_minimum_area_pixels: 20
+      standalone_tree_minimum_probability: 0.55
+      standalone_tree_minimum_margin: 0.15
+      standalone_tree_minimum_purity: 0.80
+      standalone_building_minimum_area_pixels: 20
+      standalone_building_minimum_probability: 0.65
+      standalone_building_minimum_margin: 0.20
+      standalone_building_minimum_purity: 0.90
+      agriculture_minimum_boundary_fraction: 0.75
+      building_minimum_probability: 0.35
+      road_minimum_probability: 0.30
+    merge:
+      enabled: true
+      auto_apply: false
+      minimum_shared_boundary_pixels: 8
+      minimum_shared_boundary_fraction: 0.15
+      score_threshold: 0.98
+
+  evidence:
+    semantic_weight: 0.35
+    boundary_weight: 0.30
+    appearance_weight: 0.25
+    shape_weight: 0.10
+
+  review:
+    crop_padding_pixels: 32
+    maximum_candidates_per_tile: 5000
+
+  # Automatic mode intentionally does not interpret the weighted proposal
+  # score as a probability. Every listed raw-evidence gate must pass, protected
+  # object/network classes abstain, and overlapping proposals are resolved
+  # deterministically before the normal replay validators run.
+  automatic:
+    policy_version: automatic_selective_v1
+    protected_classes:
+      - agriculture land
+      - buildings
+      - road
+      - tree
+      - unknown
+    merge:
+      enabled: true
+      minimum_score: 0.99
+      minimum_shared_boundary_pixels: 12
+      minimum_shared_boundary_fraction: 0.25
+      minimum_weak_color_boundary_score: 0.95
+      minimum_region_mean_color_similarity: 0.95
+      require_not_tile_boundary: true
+    absorb:
+      enabled: true
+      minimum_score: 0.99
+      maximum_source_area_pixels: 20
+      minimum_shared_boundary_pixels: 8
+      minimum_shared_boundary_fraction: 0.80
+      minimum_best_to_runner_up_margin: 0.25
+      minimum_weak_color_boundary_score: 0.95
+      minimum_region_mean_color_similarity: 0.95
+      require_same_class: true
+      require_not_tile_boundary: true
+    maximum_selected_operations_per_tile: 10000
+
+  visualization:
+    random_seed: 42
+    alpha: 0.45
+
+  output:
+    root_directory: null
+    phase_directory: 13_refinement
+
+stage3:
+  input:
+    source: refinement
+
+  # Two segments are adjacent only when their pixels share a grid edge.
+  # Corner-only contact does not create an edge in the tile graph.
+  adjacency:
+    method: shared_edge
+    connectivity: 4
+    minimum_shared_boundary_pixels: 1
+
+  # Stage 3 preserves the exact pixel-edge polygon emitted by Stage 2.
+  geometry:
+    simplification_tolerance: 0.0
+
+  visualization:
+    random_seed: 42
+    show_ids: false
+    node_size_min: 12.0
+    node_size_max: 72.0
+    edge_width_min: 0.5
+    edge_width_max: 3.0
+    edge_alpha: 0.35
+    # These are display-only filters. graph.json keeps every exact segment and
+    # every one-pixel shared-edge adjacency for audit and later processing.
+    minimum_display_node_area_pixels: 1
+    # Unknown regions through 40 pixels are retained in the authoritative
+    # graph for audit but omitted from the normal analysis view.
+    minimum_display_unknown_area_pixels: 41
+    # Small known-class pieces created only by four-connected topology
+    # normalization are omitted too; native Stage 2 objects are preserved.
+    minimum_display_topology_fragment_area_pixels: 41
+    minimum_display_shared_boundary_pixels: 2
+    route_edges_through_contacts: true
+    show_contact_anchors: false
+
+  output:
+    root_directory: artifacts/stage3

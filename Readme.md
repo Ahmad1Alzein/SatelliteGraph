@@ -1,19 +1,47 @@
 # SatelliteGraph
 
-SatelliteGraph turns an existing Stage 1 image tile into one complete semantic
-instance segmentation. Stage 2 runs two models in one pipeline:
+SatelliteGraph turns satellite imagery into semantic instance segmentations
+and tile-local adjacency graphs. The current workflow is:
+
+1. Stage 1 divides a source raster into overlapping image tiles.
+2. Stage 2 creates one complete semantic instance segmentation for a tile.
+3. Stage 2R refines segment topology and replays reviewed corrections.
+4. Stage 3 converts the refined segments into a graph for that tile.
+
+Stage 2 runs two models in one pipeline:
 
 - **SAM 2.1 Hiera-Large** proposes detailed, class-agnostic segment geometry.
 - **OpenEarthMap FasterSeg** supplies the named land-cover labels.
 - Deterministic fusion resolves overlaps, fills uncovered valid pixels, and uses
   `unknown` when no OpenEarthMap class is confident enough.
 
-The result is complete for one tile: every valid pixel belongs to exactly one
-instance and has exactly one semantic value. Neighboring tiles are not stitched
-or reconciled in Stage 2; cross-tile merging belongs to a later project stage.
+The Stage 2 result is complete for one tile: every valid pixel belongs to
+exactly one instance and has exactly one semantic value. Stage 2R makes each
+graph entity four-connected while preserving immutable Stage 2 lineage and
+offers two decision paths over the same deterministic proposals:
 
-See [Stage 2 full segmentation](docs/stage2-segmentation.md) for the complete
-input, provenance, coordinate, and artifact contract.
+- `human_review` produces checksum-bound crops and accepts only explicit
+  reviewer decisions for generic merge, absorb, and supplied semantic-split
+  operations; and
+- `automatic` runs unattended, approving only conservative same-class,
+  interior merge/absorb proposals whose score **and** raw evidence gates all
+  pass. It records every other pending proposal as an abstention and leaves it
+  unchanged.
+
+Both paths also replay the independently gated, at-most-40-pixel unknown
+cleanup rules. Valid pixels are never deleted. Stage 3 creates one node per
+refined segment and an undirected edge whenever two segments share a pixel
+side. Corner-only contact is not adjacency.
+
+See [Stage 2 full segmentation](docs/stage2-segmentation.md),
+[Stage 2R refinement](docs/stage2-refinement.md), and
+[Stage 3 graph building](docs/stage3-graph-building.md) for their complete
+artifact and metadata contracts. A presentation-oriented explanation of the
+refinement decisions and similarity formulas is available in
+[Refinement teacher discussion](docs/refinement-teacher-discussion.md).
+
+These stages operate on one tile at a time. Cross-tile reconciliation and graph
+combination are intentionally deferred to Stage 4.
 
 ## Setup
 
@@ -24,8 +52,8 @@ python -m pip install -r requirements.txt
 ```
 
 Edit `config.yaml` to configure project paths, both models, preprocessing,
-filtering, fusion, visualization, and output. There is no separate Stage 2 or
-landscape configuration and no Streamlit application.
+filtering, fusion, refinement, graph construction, visualization, and output. There is no
+separate per-stage configuration and no Streamlit application.
 
 The configured model assets are local and are not downloaded while the pipeline
 runs:
@@ -50,7 +78,7 @@ data/metadata/<source>.csv
 Run Stage 2 with the canonical tile ID `<source>__tile_XXXXX`; `run_stage2` and
 the CLI take a `tile_id`, not an image path.
 
-## Run one tile
+## Run Stage 2 for one tile
 
 From Python, use the single public runner:
 
@@ -81,3 +109,147 @@ The final records preserve tile-local pixels, source/global pixels, projected
 coordinates, and WGS84 coordinates when the source raster contains usable
 georeferencing. GeoTIFF and GeoJSON exports are included alongside the NumPy and
 JSON artifacts.
+
+## Refine the segmentation in either mode
+
+Stage 2R always regenerates proposals from immutable `12_final` data, replays
+the selected operations, validates the result, and writes
+`artifacts/stage2/<tile_id>/13_refinement/`. `refinement.mode` defaults to
+`human_review`, and a CLI mode flag can override it for one run.
+
+For a tile where a person should inspect buildings, canopy fragments, and
+other proposed corrections:
+
+```powershell
+python -m src refine propose --tile-id scene__tile_00000
+# Inspect review/index.json and edit decisions.template.json.
+python -m src refine apply `
+  --tile-id scene__tile_00000 `
+  --mode human_review `
+  --decisions artifacts/stage2/scene__tile_00000/13_refinement/decisions.template.json
+python -m src refine validate --tile-id scene__tile_00000
+```
+
+The template starts at `uncertain`. An omitted or all-`uncertain` document
+authorizes no review-gated edit, although deterministic connectivity and the
+embedded unknown-cleanup rules still run. Proposal mode writes
+`review/index.json`, exact normalized masks/maps, and one
+original/before/proposed crop per pending merge or absorb.
+
+For one tile with no reviewer:
+
+```powershell
+python -m src refine auto --tile-id scene__tile_00000
+python -m src refine validate --tile-id scene__tile_00000
+```
+
+`refine auto` is equivalent to `refine apply --mode automatic`; reviewed
+decision files are intentionally not accepted in this mode. The
+`automatic_selective_v1` policy can approve generic merges only for supported
+same-class, non-border homogeneous regions, and generic absorbs only when the
+small source and target have the same non-protected class. It protects
+`road`, `agriculture land`, `buildings`, `tree`, and `unknown` from these
+generic automatic operations. A high combined score is insufficient by
+itself: exact four-neighbor adjacency, shared-boundary support, boundary and
+region color agreement, class policy, source area where applicable, and all
+configured thresholds must pass. Missing or weak evidence, a protected class,
+a tile-border contact, or a proposal conflict produces `uncertain`, not a
+forced edit. Automatic color evidence must come from the Stage 2 preprocessed
+tile array or the original tile path; a rendered segmentation overlay is never
+accepted as raw automatic evidence. Without an authoritative image, the run
+still completes conservatively but does not invent image-based operations.
+
+The separately replay-validated `micro-unknown-v1` and
+`contextual-micro-v1` rules remain available in both modes. They are bounded to
+unknown regions of at most 40 pixels, never delete valid pixels, and apply
+their own OpenEarthMap, adjacency, border, and protected-object gates. This is
+why a contextual unknown may be assigned to a road/building/field only under
+its specialized safeguards even though generic automatic operations protect
+those classes.
+
+For hundreds of complete Stage 2 tiles, omit `--tile-id` to discover all tiles
+with a `12_final/manifest.json` and use bounded workers:
+
+```powershell
+python -m src refine batch --mode automatic --workers 4
+```
+
+Repeat `--tile-id` to select an explicit subset. Automatic batch runs resume by
+default: a completed, non-stale result is skipped only when its mode,
+configuration hash, manifest, checksums, and loaded artifacts remain valid.
+Use `--force` to recompute those compatible results. By default one failed tile
+does not stop the others; the per-run failure ledger at
+`artifacts/stage2/_batch/refinement_batch_report.json` records ordered tile
+statuses (`complete`, `skipped`, or `failed`) and each failure's exception type
+and message. Add `--fail-fast` when immediate termination is preferred.
+
+The same batch command with `--mode human_review` generates review bundles for
+all selected tiles but does not apply their pending review decisions. Connected
+semantic splits use an exact checksum-bound partition through the Python core
+API; neither automatic mode nor the CLI guesses building, road-junction,
+canopy, or field boundaries in this release. See the Stage 2R guide for the
+full policy, reports, and research roadmap.
+
+## Build the tile graph with Stage 3
+
+Stage 3 does not silently fall back to `12_final` and does not rerun either
+segmentation model. Once Stage 2 is complete, run unattended refinement and
+build the graph with one command:
+
+```powershell
+python -m src stage3 run `
+  --tile-id IKONOS_2005-002__tile_00003 `
+  --refine-first `
+  --refinement-mode automatic
+```
+
+From the beginning, use:
+
+```powershell
+python -m src stage2 run --tile-id IKONOS_2005-002__tile_00003
+python -m src stage3 run `
+  --tile-id IKONOS_2005-002__tile_00003 `
+  --refine-first `
+  --refinement-mode automatic
+```
+
+For reviewed decisions, use `--refinement-mode human_review` together with
+`--refinement-decisions <path>`. Automatic mode generates its own decisions and
+does not accept a human decisions document. Use separate `refine propose`,
+`refine apply`, and `refine validate` commands when you want to inspect the
+review workflow explicitly.
+
+Or call the public Python API:
+
+```python
+from src.stage3 import run_stage3
+
+result = run_stage3("scene__tile_00000")
+print(result.summary())
+```
+
+The default output is `artifacts/stage3/<tile_id>/01_graph/`. It includes the
+authoritative `graph.json`/`graph_arrays.npz`, explicit low-noise
+`graph_analysis.json`/`graph_analysis_arrays.npz`, adjacency CSV, node polygons,
+reports/manifests, and views of the segmentation and spatial graph. Every node
+retains its exact refinement record and complete immutable Stage 2 lineage,
+including semantic type, coordinates, confidence, and provenance, and adds its
+exact pixel-edge polygon.
+
+`refinement_graph_before_after.png` places the graph reconstructed from
+immutable `12_final` beside the refined graph, both over semantic-class
+backgrounds. Purple is therefore always the explicit unresolved `unknown`
+class in this comparison.
+
+Adjacency is exact four-neighbor shared-edge adjacency over the refined
+`instance_map`. A one-pixel shared side creates an edge; diagonal contact alone
+does not. The authoritative exports keep every node and every one-side edge.
+For the normal low-noise view, the default threshold of 41 excludes unknown
+nodes and topology-split micro-fragments through 40 pixels (while preserving
+native small known objects) and excludes edges with fewer than two shared
+sides, then routes each included edge through its measured contact centroid.
+Every `graph.json`
+node and edge carries `analysis_view.included` and exclusion reasons; full graph
+counts remain authoritative, while `graph_analysis.json` is the checksum-bound
+selected subgraph and `report.json.analysis_graph` records its counts.
+See the Stage 3 document for the precise metadata and artifact schema.

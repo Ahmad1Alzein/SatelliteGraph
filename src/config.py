@@ -33,6 +33,7 @@ DUPE_POLICIES = {
     "merge_union",
 }
 NESTED_POLICIES = {"keep_all", "keep_parent", "keep_child", "remove_near_identical_only"}
+STAGE3_ADJACENCY_METHODS = {"shared_edge"}
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
@@ -51,7 +52,12 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> None:
-    """Validate the complete project and Stage 2 document."""
+    """Validate the unified project configuration document.
+
+    Stage 3 remains optional here so existing programmatic Stage 2
+    configurations keep working.  Stage 3 entry points require it through
+    :func:`select_stage3_config`.
+    """
     _require_mapping(config, "configuration")
     _require_keys(config, {"project", "stage2"}, "configuration")
     validate_project_config(config["project"])
@@ -76,6 +82,10 @@ def validate_config(config: dict[str, Any]) -> None:
     validate_fusion_config(stage2["fusion"])
     _validate_visualization(stage2["visualization"])
     _validate_output(stage2["output"])
+    if "refinement" in config:
+        validate_refinement_config(config["refinement"])
+    if "stage3" in config:
+        validate_stage3_config(config["stage3"])
 
 
 def validate_project_config(config: dict[str, Any]) -> None:
@@ -231,6 +241,122 @@ def validate_fusion_config(config: dict[str, Any]) -> None:
         _positive_int(value, f"stage2.fusion.minimum_component_area.{label}", allow_zero=True)
 
 
+def validate_stage3_config(config: dict[str, Any]) -> None:
+    """Validate exact per-tile graph construction settings."""
+    config = _require_mapping(config, "stage3")
+    _require_keys(
+        config,
+        {"input", "adjacency", "geometry", "visualization", "output"},
+        "stage3",
+    )
+
+    input_config = _require_mapping(config["input"], "stage3.input")
+    _require_keys(input_config, {"source"}, "stage3.input")
+    if input_config["source"] != "refinement":
+        raise ValueError("stage3.input.source must be 'refinement'")
+
+    adjacency = _require_mapping(config["adjacency"], "stage3.adjacency")
+    _require_keys(
+        adjacency,
+        {"method", "connectivity", "minimum_shared_boundary_pixels"},
+        "stage3.adjacency",
+    )
+    if adjacency["method"] not in STAGE3_ADJACENCY_METHODS:
+        raise ValueError("stage3.adjacency.method must be 'shared_edge'")
+    connectivity = _positive_int(adjacency["connectivity"], "stage3.adjacency.connectivity")
+    if connectivity != 4:
+        raise ValueError("stage3.adjacency.connectivity must be 4 for shared-edge adjacency")
+    minimum_shared_boundary = _positive_int(
+        adjacency["minimum_shared_boundary_pixels"],
+        "stage3.adjacency.minimum_shared_boundary_pixels",
+    )
+    if minimum_shared_boundary != 1:
+        raise ValueError(
+            "stage3.adjacency.minimum_shared_boundary_pixels must be 1; "
+            "Stage 3 preserves every shared-edge adjacency"
+        )
+
+    geometry = _require_mapping(config["geometry"], "stage3.geometry")
+    _require_keys(geometry, {"simplification_tolerance"}, "stage3.geometry")
+    tolerance = _number(
+        geometry["simplification_tolerance"],
+        "stage3.geometry.simplification_tolerance",
+    )
+    if tolerance != 0:
+        raise ValueError(
+            "stage3.geometry.simplification_tolerance must be 0.0; "
+            "Stage 3 preserves exact pixel-edge polygons"
+        )
+
+    visualization = _require_mapping(config["visualization"], "stage3.visualization")
+    _require_keys(
+        visualization,
+        {
+            "random_seed",
+            "show_ids",
+            "node_size_min",
+            "node_size_max",
+            "edge_width_min",
+            "edge_width_max",
+            "edge_alpha",
+        },
+        "stage3.visualization",
+    )
+    _nonnegative_int(visualization["random_seed"], "stage3.visualization.random_seed")
+    if not isinstance(visualization["show_ids"], bool):
+        raise ValueError("stage3.visualization.show_ids must be a boolean")
+    node_size_min = _positive_number(
+        visualization["node_size_min"], "stage3.visualization.node_size_min"
+    )
+    node_size_max = _positive_number(
+        visualization["node_size_max"], "stage3.visualization.node_size_max"
+    )
+    if node_size_min > node_size_max:
+        raise ValueError("stage3.visualization.node_size_min must not exceed node_size_max")
+    edge_width_min = _positive_number(
+        visualization["edge_width_min"], "stage3.visualization.edge_width_min"
+    )
+    edge_width_max = _positive_number(
+        visualization["edge_width_max"], "stage3.visualization.edge_width_max"
+    )
+    if edge_width_min > edge_width_max:
+        raise ValueError("stage3.visualization.edge_width_min must not exceed edge_width_max")
+    edge_alpha = _number(visualization["edge_alpha"], "stage3.visualization.edge_alpha")
+    if not 0 <= edge_alpha <= 1:
+        raise ValueError("stage3.visualization.edge_alpha must be between 0 and 1")
+    _nonnegative_int(
+        visualization.get("minimum_display_node_area_pixels", 0),
+        "stage3.visualization.minimum_display_node_area_pixels",
+    )
+    _nonnegative_int(
+        visualization.get("minimum_display_unknown_area_pixels", 0),
+        "stage3.visualization.minimum_display_unknown_area_pixels",
+    )
+    _nonnegative_int(
+        visualization.get("minimum_display_topology_fragment_area_pixels", 0),
+        "stage3.visualization.minimum_display_topology_fragment_area_pixels",
+    )
+    _nonnegative_int(
+        visualization.get("minimum_display_shared_boundary_pixels", 0),
+        "stage3.visualization.minimum_display_shared_boundary_pixels",
+    )
+    for name in ("route_edges_through_contacts", "show_contact_anchors"):
+        if not isinstance(visualization.get(name, True), bool):
+            raise ValueError(f"stage3.visualization.{name} must be a boolean")
+
+    _validate_stage3_output(config["output"])
+
+
+def validate_refinement_config(config: dict[str, Any]) -> None:
+    """Validate the reversible Stage 2R refinement configuration."""
+
+    # Kept as a lazy import because :mod:`src.config` validates the root YAML
+    # while it is itself being imported by the processing stages.
+    from src.refinement.config import select_refinement_config as select
+
+    select(config)
+
+
 def select_project_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return only project paths and tiling settings."""
     project = copy.deepcopy(_require_mapping(config.get("project"), "project"))
@@ -244,6 +370,25 @@ def select_stage2_config(config: dict[str, Any]) -> dict[str, Any]:
     candidate = {"project": select_project_config(config), "stage2": stage2}
     validate_config(candidate)
     return stage2
+
+
+def select_stage3_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return Stage 3 settings with the Stage 2 artifact root derived once."""
+    stage3 = copy.deepcopy(_require_mapping(config.get("stage3"), "stage3"))
+    validate_stage3_config(stage3)
+    stage2 = select_stage2_config(config)
+    stage3["stage2_root"] = stage2["output"]["root_directory"]
+    if config.get("_config_path"):
+        stage3["_config_path"] = config["_config_path"]
+    return stage3
+
+
+def select_refinement_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return validated Stage 2R settings with the Stage 2 root derived once."""
+
+    from src.refinement.config import select_refinement_config as select
+
+    return select(config)
 
 
 def select_instance_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -292,6 +437,17 @@ def semantic_config(project_config: dict[str, Any]) -> dict[str, Any]:
     return select_landscape_config(project_config)
 
 
+def stage3_config(project_config: dict[str, Any]) -> dict[str, Any]:
+    """Public selector for the per-tile graph-building pipeline."""
+    return select_stage3_config(project_config)
+
+
+def refinement_config(project_config: dict[str, Any]) -> dict[str, Any]:
+    """Public selector for reversible Stage 2R refinement settings."""
+
+    return select_refinement_config(project_config)
+
+
 def load_stage2_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
     """Load the unified YAML and select its legacy instance-phase view."""
     return select_instance_config(load_config(path))
@@ -300,6 +456,17 @@ def load_stage2_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
 def load_landscape_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
     """Load the unified YAML and select its legacy semantic/fusion view."""
     return select_landscape_config(load_config(path))
+
+
+def load_stage3_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
+    """Load the unified YAML and select Stage 3 graph settings."""
+    return select_stage3_config(load_config(path))
+
+
+def load_refinement_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
+    """Load the unified YAML and select Stage 2R refinement settings."""
+
+    return select_refinement_config(load_config(path))
 
 
 def validate_landscape_config(config: dict[str, Any]) -> None:
@@ -409,6 +576,19 @@ def landscape_config_hash(config: dict[str, Any], phase: str) -> str:
     return stable_hash(relevant_landscape_config(config, phase))
 
 
+def stage3_config_hash(config: dict[str, Any]) -> str:
+    """Hash graph behavior plus the derived Stage 2 artifact location."""
+    return stable_hash(select_stage3_config(config))
+
+
+def refinement_config_hash(config: dict[str, Any]) -> str:
+    """Hash refinement behavior plus its derived Stage 2 artifact location."""
+
+    from src.refinement.config import config_hash as refinement_hash
+
+    return refinement_hash(select_refinement_config(config))
+
+
 def _instance_view(stage2: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(_require_mapping(stage2["instance_model"], "stage2.instance_model"))
     for name in ("preprocessing", "filtering", "deduplication", "coverage", "visualization", "output"):
@@ -432,6 +612,13 @@ def _validate_output(config: dict[str, Any]) -> None:
         raise ValueError("stage2.output.root_directory must be a non-empty path string")
 
 
+def _validate_stage3_output(config: dict[str, Any]) -> None:
+    config = _require_mapping(config, "stage3.output")
+    _require_keys(config, {"root_directory"}, "stage3.output")
+    if not isinstance(config["root_directory"], str) or not config["root_directory"].strip():
+        raise ValueError("stage3.output.root_directory must be a non-empty path string")
+
+
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be a mapping")
@@ -448,6 +635,13 @@ def _number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be numeric")
     return float(value)
+
+
+def _positive_number(value: Any, name: str) -> float:
+    number = _number(value, name)
+    if number <= 0:
+        raise ValueError(f"{name} must be positive")
+    return number
 
 
 def _positive_int(value: Any, name: str, *, allow_zero: bool = False) -> int:
