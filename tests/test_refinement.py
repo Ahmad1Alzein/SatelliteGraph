@@ -353,7 +353,7 @@ def test_connectivity_normalization_is_internal_and_micro_fragments_do_not_add_o
     assert checksum(stage2 / "segmentation.npz") == original_maps_checksum
 
 
-def test_only_secondary_components_at_the_area_floor_become_objects() -> None:
+def test_topology_alone_never_increases_the_published_object_count() -> None:
     instance_map = np.full((10, 10), 2, dtype=np.int32)
     instance_map[1:4, 1:4] = 1  # nine-pixel anchor
     instance_map[7:9, 7:9] = 1  # four-pixel secondary component
@@ -388,19 +388,21 @@ def test_only_secondary_components_at_the_area_floor_become_objects() -> None:
         "consolidated_micro_component_count"
     ] == 1
 
-    promoted = consolidate_micro_components(
+    count_capped = consolidate_micro_components(
         normalized,
         minimum_object_component_area_pixels=4,
         source_stage2_segment_count=2,
     )
-    assert len(promoted.records) == 3
-    assert promoted.report["object_identity"][
+    assert len(count_capped.records) == 2
+    assert count_capped.report["object_identity"][
         "promoted_large_secondary_component_count"
+    ] == 0
+    assert count_capped.report["object_identity"][
+        "budget_consolidated_component_count"
     ] == 1
-    assert all(
-        _four_connected_component_count(promoted.instance_map == instance_id) == 1
-        for instance_id in range(1, 4)
-    )
+    assert count_capped.report["object_identity"][
+        "topology_alone_cannot_increase_object_count"
+    ] is True
 
 
 @pytest.mark.parametrize(

@@ -39,8 +39,12 @@ The two modes serve different scales:
 
 The shared refinement policy is intentionally conservative:
 
-- deterministic four-connected component normalization is applied
-  automatically;
+- deterministic four-connected component normalization is applied internally;
+  secondary topology-only pieces through 40 pixels are consolidated back into
+  the original object identity before publication, while larger pieces are
+  only candidates to remain separate;
+- a hard topology budget prevents the published object count from exceeding
+  the Stage 2 count plus growth from explicit, approved semantic splits;
 - the strict `micro-unknown-v1` rule and bounded `contextual-micro-v1` pass
   automatically contract eligible `unknown` regions of at most 40 pixels into
   directly adjacent known regions in either workflow mode;
@@ -105,14 +109,15 @@ on exact raster contact, RGB evidence, class policy, and proposal metadata.
 
 RGB is loaded in this order: `02_preprocessing/sam_input.npy`, the original
 `tile_metadata.image_path`, then `12_final/final_overlay.png`. The first two are
-authoritative image evidence. The overlay is only a rendered fallback for a
-human review bundle; automatic mode deliberately excludes it from proposal
-evidence because segmentation colors would make an artificial boundary look
-like source imagery. If no authoritative RGB is available, automatic mode
-records that fact in `automatic_selection.source_evidence`, has no pair-color
-evidence for generic operations, and lets cleanup rules that require that
-evidence abstain. Connectivity normalization can still complete and publish a
-valid conservative result.
+authoritative image evidence. The overlay is a display fallback only and is
+excluded from proposal evidence in both modes because segmentation colors would
+make an artificial boundary look like source imagery. Human and automatic runs
+therefore build exactly the same candidates from the same evidence; only their
+decision provider differs. If no authoritative RGB is available, automatic
+mode records that fact in `automatic_selection.source_evidence`, generic
+image-based proposals are absent, and evidence-dependent cleanup rules abstain.
+Internal connectivity analysis and object-identity consolidation can still
+publish a valid conservative result.
 
 The following invariants are non-negotiable:
 
@@ -369,7 +374,8 @@ python -m src refine validate --tile-id scene__tile_00000
 ```
 
 Validation reloads the published artifacts and verifies coverage, masks,
-semantics, connectivity, lineage, checksums, and replay metadata. Do not run
+semantics, connected or explicitly declared multipart identity, lineage,
+checksums, and replay metadata. Do not run
 Stage 3 from a refinement directory that has not passed this command.
 
 ## 5. Deterministic connectivity normalization
@@ -378,8 +384,9 @@ Stage 2 used eight-neighbor connectivity while Stage 3 defines adjacency by
 shared pixel sides. An eight-connected ID can therefore contain pieces that
 meet only diagonally and become a disconnected `MultiPolygon` in the graph.
 
-Stage 2R decomposes every positive Stage 2 instance into four-connected
-components. The ordering rule is fixed:
+Stage 2R first decomposes every positive Stage 2 instance into four-connected
+components for proposal evidence and operation replay. The ordering rule is
+fixed:
 
 1. visit Stage 2 instance IDs in ascending order;
 2. sort that parent's components by top row, then left column, then decreasing
@@ -389,23 +396,38 @@ components. The ordering rule is fixed:
 For example:
 
 ```text
-Stage 2 instance map       Refined instance map
+Stage 2 instance map       Internal evidence map       Published object map
 
-1 1 2 2                   1 1 3 3
-1 1 2 2                   1 1 3 3
-3 3 1 1                   4 4 2 2
-3 3 1 1                   4 4 2 2
+1 1 2 2                   1 1 3 3                     1 1 2 2
+1 1 2 2                   1 1 3 3                     1 1 2 2
+3 3 1 1                   4 4 2 2                     3 3 1 1
+3 3 1 1                   4 4 2 2                     3 3 1 1
 ```
 
-The two diagonal pieces belonging to old instance `1` become refined IDs `1`
-and `2`. Their shared `entity_group_id` and Stage 2 lineage preserve the fact
-that they came from the same original canopy candidate; they are nevertheless
-separate graph nodes because they share no pixel side.
+The two diagonal pieces belonging to old instance `1` become internal component
+IDs `1` and `2`. With the default
+`minimum_component_area_pixels: 41`, the four-pixel secondary piece is below
+the object-promotion floor, so publication consolidates it with the largest
+sibling under one multipart object identity. It does **not** become another
+graph node. A secondary component of 41 pixels or more is eligible to remain
+separate because it may be a genuine object incorrectly grouped by Stage 2. It
+is still consolidated if publishing it would exceed the hard topology budget.
+Connectivity normalization alone therefore cannot increase the final
+object/node count; only an explicit approved semantic split receives an
+increase allowance.
 
-Connectivity normalization changes instance identity only. It does not alter
-the semantic, confidence, source, or valid-data value of any pixel.
+This consolidation is identity-only: it does not paint over, move, or delete
+the secondary pixels. The exact mask is represented downstream as a
+`MultiPolygon`. Connectivity analysis and consolidation do not alter the
+semantic, confidence, source, or valid-data value of any pixel.
 
 ## 6. Operation policies and replay
+
+The current supported-energy extension and measured four-tile threshold sweep
+are described in [Unknown cleanup calibration](unknown-cleanup-calibration.md).
+The ordinary contextual ceiling remains 0.40; up to 0.50 is allowed only when
+the additional independent probability, contact, appearance, and ambiguity
+gates pass. This changes actual absorption, independently of graph filtering.
 
 ### 6.1 Split
 
@@ -577,8 +599,8 @@ Approval is an instruction to recheck an operation, not permission to bypass
 the raster contract. Every apply run regenerates proposals from immutable
 Stage 2, validates proposal and decision identities, rejects duplicate or
 unknown IDs, and checks that no incompatible operations share an entity.
-Class hard vetoes, direct adjacency, exact disjoint union, four-connectivity,
-valid-pixel coverage, and output metadata are checked again.
+Class hard vetoes, direct adjacency, exact disjoint union, internal
+four-connectivity, valid-pixel coverage, and output metadata are checked again.
 
 For an `automatic_selective_v1` generic merge or absorb, replay recomputes pair
 evidence from the normalized instance raster and source RGB, reconstructs the
@@ -591,9 +613,12 @@ target, maximum energy, and runner-up separation. A stale threshold snapshot or
 changed evidence fails the run rather than silently applying the edit.
 
 After replay, result validation proves dense-map coverage, non-overlap,
-four-connected positive IDs, mask/record agreement, semantic consistency,
-contiguous IDs, and lineage integrity. The public manifest is marked complete
-and non-stale only after the artifacts and their checksums have been written.
+mask/record agreement, semantic consistency, contiguous IDs, and lineage
+integrity. A final object must either be four-connected or carry an exact
+`connected_component_count` and `is_four_connected: false` declaration created
+by the micro-component consolidation pass. Any undeclared disconnected object
+still fails validation. The public manifest is marked complete and non-stale
+only after the artifacts and their checksums have been written.
 
 ## 7. Segment lineage
 
@@ -607,7 +632,8 @@ the immutable Stage 2 record. Core fields include:
 | `entity_id` | Tile-qualified refined entity identifier. |
 | `stage2_instance_id` | Direct Stage 2 parent for connectivity children. |
 | `stage2_segment_id` | Direct Stage 2 segment identifier. |
-| `component_index`, `component_count` | Position and count in four-connected normalization. |
+| `component_index`, `component_count` | Position and original count in internal four-connected normalization. |
+| `connected_component_count`, `is_four_connected` | Exact published-mask topology; explicitly identifies a consolidated multipart object. |
 | `source_stage2_instance_ids` | All original Stage 2 IDs contributing pixels. |
 | `source_stage2_segment_ids` | Matching original segment identifiers. |
 | `entity_group_id` | Common group for children derived from one original entity candidate. |
@@ -868,8 +894,9 @@ Recommended rollout:
 5. adjust automatic-cleanup thresholds only after measuring the resulting error
    rate on held-out tiles.
 
-Automatic behavior currently includes connectivity normalization, bounded
-replay-validated micro-unknown cleanup, and the stricter same-class generic
+Automatic behavior currently includes internal connectivity normalization,
+micro-component identity consolidation, bounded replay-validated micro-unknown
+cleanup, and the stricter same-class generic
 merge/absorb subset in Section 4.5. It does **not** include road-junction
 decomposition, agricultural-field boundary generation, connected
 building/canopy split generation, generic cross-class relabeling, or cross-tile

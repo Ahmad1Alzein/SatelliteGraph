@@ -242,7 +242,9 @@ def apply_refinement(
 
     Automatic mode is fully unattended but not forceful: candidates which do
     not pass every configured evidence gate are recorded as ``uncertain`` and
-    leave the normalized Stage 2 geometry unchanged.
+    leave their semantic object geometry unchanged. Topology-only
+    micro-components are still consolidated under their parent object identity
+    before publication in both modes.
     """
 
     root = Path(project_root).expanduser().resolve()
@@ -572,7 +574,7 @@ def _attach_ontology(records: Sequence[dict[str, Any]], cfg: Mapping[str, Any]) 
         record["ontology"] = {
             **rule,
             "target_definition_validated": False,
-            "validation_status": "connectivity_normalized_pending_semantic_review",
+            "validation_status": "topology_evaluated_object_identity_published",
         }
         if class_name == "road":
             record["segment_subtype"] = "road_reach_candidate"

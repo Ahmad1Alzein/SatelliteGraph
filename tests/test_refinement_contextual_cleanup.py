@@ -24,6 +24,30 @@ CLASS_IDS = {
 }
 
 
+def test_supported_energy_extension_requires_each_independent_gate():
+    instance_map = np.asarray([[2, 2, 2], [2, 1, 3], [3, 3, 3]], dtype=np.int32)
+    records = _records(instance_map, {1: "unknown", 2: "rangeland", 3: "tree"})
+    probabilities = _probabilities(instance_map, 1, {"rangeland": .35, "tree": .20, "buildings": .45})
+    pairs = _pairs(instance_map)
+    old = evaluate_contextual_micro_cleanup(records, instance_map, pairs, probabilities, {})[0]
+    assert old["action"] == "abstain"
+    cfg = {"supported_maximum_energy": .50}
+    new = evaluate_contextual_micro_cleanup(records, instance_map, pairs, probabilities, cfg)[0]
+    assert new["action"] == "absorb"
+    assert new["target_instance_id"] == 2
+    assert new["evidence"]["selected_energy_limit"] == .50
+    for key, value in (
+        ("supported_minimum_probability", .36),
+        ("supported_minimum_boundary_fraction", .51),
+    ):
+        rejected = evaluate_contextual_micro_cleanup(records, instance_map, pairs, probabilities, {**cfg, key: value})[0]
+        assert rejected["action"] == "abstain"
+    for pair in pairs:
+        if pair["source_instance_id"] == 1 and pair["target_instance_id"] == 2:
+            pair["weak_color_boundary_score"] = .49
+    assert evaluate_contextual_micro_cleanup(records, instance_map, pairs, probabilities, cfg)[0]["action"] == "abstain"
+
+
 @pytest.fixture
 def cleanup_config() -> dict:
     return {

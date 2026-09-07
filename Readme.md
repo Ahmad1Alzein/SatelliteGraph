@@ -7,6 +7,8 @@ and tile-local adjacency graphs. The current workflow is:
 2. Stage 2 creates one complete semantic instance segmentation for a tile.
 3. Stage 2R refines segment topology and replays reviewed corrections.
 4. Stage 3 converts the refined segments into a graph for that tile.
+5. Stage 4 combines any selected set of tile graphs in source coordinates and
+   reconciles duplicate objects in their overlaps.
 
 Stage 2 runs two models in one pipeline:
 
@@ -16,9 +18,15 @@ Stage 2 runs two models in one pipeline:
   `unknown` when no OpenEarthMap class is confident enough.
 
 The Stage 2 result is complete for one tile: every valid pixel belongs to
-exactly one instance and has exactly one semantic value. Stage 2R makes each
-graph entity four-connected while preserving immutable Stage 2 lineage and
-offers two decision paths over the same deterministic proposals:
+exactly one instance and has exactly one semantic value. Stage 2R temporarily
+decomposes objects into four-connected pieces for evidence and replay, then
+consolidates topology-only secondary pieces through 40 pixels back into their
+original object identity before graph export. This prevents speckle from
+creating hundreds of new nodes while preserving every pixel and immutable
+Stage 2 lineage. A hard count budget also prevents larger topology-only pieces
+from raising the published object count above Stage 2; only an explicit,
+approved semantic split can add a corresponding allowance. It offers two
+decision paths over the same deterministic proposals:
 
 - `human_review` produces checksum-bound crops and accepts only explicit
   reviewer decisions for generic merge, absorb, and supplied semantic-split
@@ -35,13 +43,14 @@ side. Corner-only contact is not adjacency.
 
 See [Stage 2 full segmentation](docs/stage2-segmentation.md),
 [Stage 2R refinement](docs/stage2-refinement.md), and
-[Stage 3 graph building](docs/stage3-graph-building.md) for their complete
+[Stage 3 graph building](docs/stage3-graph-building.md), and
+[Stage 4 graph combination](docs/stage4-graph-combination.md) for their complete
 artifact and metadata contracts. A presentation-oriented explanation of the
 refinement decisions and similarity formulas is available in
 [Refinement teacher discussion](docs/refinement-teacher-discussion.md).
 
-These stages operate on one tile at a time. Cross-tile reconciliation and graph
-combination are intentionally deferred to Stage 4.
+Stages 2, 2R, and 3 operate on one tile at a time. Stage 4 performs the
+cross-tile reconciliation and graph combination.
 
 ## Setup
 
@@ -131,8 +140,9 @@ python -m src refine validate --tile-id scene__tile_00000
 ```
 
 The template starts at `uncertain`. An omitted or all-`uncertain` document
-authorizes no review-gated edit, although deterministic connectivity and the
-embedded unknown-cleanup rules still run. Proposal mode writes
+authorizes no review-gated edit, although internal connectivity analysis,
+micro-component identity consolidation, and the embedded unknown-cleanup rules
+still run. Proposal mode writes
 `review/index.json`, exact normalized masks/maps, and one
 original/before/proposed crop per pending merge or absorb.
 
@@ -154,10 +164,12 @@ itself: exact four-neighbor adjacency, shared-boundary support, boundary and
 region color agreement, class policy, source area where applicable, and all
 configured thresholds must pass. Missing or weak evidence, a protected class,
 a tile-border contact, or a proposal conflict produces `uncertain`, not a
-forced edit. Automatic color evidence must come from the Stage 2 preprocessed
-tile array or the original tile path; a rendered segmentation overlay is never
-accepted as raw automatic evidence. Without an authoritative image, the run
-still completes conservatively but does not invent image-based operations.
+forced edit. Color evidence in both modes must come from the Stage 2
+preprocessed tile array or the original tile path; a rendered segmentation
+overlay is never accepted as source-image evidence. This guarantees that human
+and automatic runs generate the same proposal set. Without an authoritative
+image, the run still completes conservatively but does not invent image-based
+operations.
 
 The separately replay-validated `micro-unknown-v1` and
 `contextual-micro-v1` rules remain available in both modes. They are bounded to
@@ -244,12 +256,44 @@ class in this comparison.
 Adjacency is exact four-neighbor shared-edge adjacency over the refined
 `instance_map`. A one-pixel shared side creates an edge; diagonal contact alone
 does not. The authoritative exports keep every node and every one-side edge.
-For the normal low-noise view, the default threshold of 41 excludes unknown
-nodes and topology-split micro-fragments through 40 pixels (while preserving
-native small known objects) and excludes edges with fewer than two shared
-sides, then routes each included edge through its measured contact centroid.
+For the normal low-noise view, the default threshold of 41 excludes remaining
+unknown nodes through 40 pixels and edges with fewer than two shared sides,
+then routes each included edge through its measured contact centroid.
+Topology-split micro-fragments through 40 pixels have already been consolidated
+into their original objects and therefore are not authoritative nodes.
 Every `graph.json`
 node and edge carries `analysis_view.included` and exclusion reasons; full graph
 counts remain authoritative, while `graph_analysis.json` is the checksum-bound
 selected subgraph and `report.json.analysis_graph` records its counts.
 See the Stage 3 document for the precise metadata and artifact schema.
+
+## Combine selected tile graphs with Stage 4
+
+After Stage 3 exists for the tiles you want, repeat `--tile-id` for any
+selection size:
+
+```powershell
+python -m src stage4 combine `
+  --tile-id IKONOS_2005-002__tile_00000 `
+  --tile-id IKONOS_2005-002__tile_00001 `
+  --tile-id IKONOS_2005-002__tile_00002 `
+  --name IKONOS_first_three_tiles
+```
+
+Stage 4 uses Stage 1 global pixel offsets for exact placement. Within overlaps,
+same-class mutual-best masks must pass IoS, IoU, bidirectional-coverage, and
+minimum-intersection gates before their identities merge. Every shared source
+pixel is then owned once, preferring a tile that has a valid prediction and
+then the tile with the greatest distance from its image edge, with semantic
+confidence and stable tile order as tie-breakers. The final adjacency graph is
+rebuilt from the resulting non-overlapping geometries.
+
+Outputs are written to `artifacts/stage4/<selection>/01_combined_graph/`,
+including the combined JSON/NumPy graph, GeoJSON, adjacency CSV, overlap match
+ledger, report, checksummed manifest, spatial graph image, and
+`combined_graph_overlay.png` drawn over the ownership-resolved tile mosaic.
+
+The normal combined overlay uses `graph_analysis.json`: unresolved unknowns
+below 41 pixels and edges with fewer than two shared sides are omitted. The
+full graph remains in `graph.json` and `combined_graph_overlay_audit.png`.
+This display selection is separate from real semantic absorption in Stage 2R.

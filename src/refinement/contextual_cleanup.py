@@ -62,6 +62,11 @@ _DEFAULTS: dict[str, Any] = {
     "semantic_consensus_minimum_margin": 0.15,
     "semantic_consensus_minimum_purity": 0.80,
     "maximum_selected_energy": 0.40,
+    "supported_maximum_energy": 0.40,
+    "supported_minimum_probability": 0.20,
+    "supported_minimum_boundary_fraction": 0.25,
+    "supported_minimum_boundary_similarity": 0.50,
+    "supported_minimum_region_similarity": 0.50,
     "minimum_energy_margin": 0.02,
     "standalone_tree_minimum_area_pixels": 20,
     "standalone_tree_minimum_probability": 0.55,
@@ -224,7 +229,9 @@ def evaluate_contextual_micro_cleanup(
                     decision_tier = "semantic_consensus"
                     reasons.append("selected_target_matches_semantic_consensus")
                     action = "absorb"
-                elif best_candidate_energy > cfg["maximum_selected_energy"]:
+                elif best_candidate_energy > contextual_energy_limit(
+                    best, probability_evidence["top_two_class_ids"], cfg
+                ):
                     reasons.append("selected_energy_above_automatic_maximum")
                 elif (
                     energy_margin is not None
@@ -266,6 +273,10 @@ def evaluate_contextual_micro_cleanup(
                 float(selected["energy"]) if selected is not None else None
             ),
             "best_candidate_energy": best_candidate_energy,
+            "selected_energy_limit": (
+                contextual_energy_limit(selected, probability_evidence["top_two_class_ids"], cfg)
+                if selected is not None else None
+            ),
             "runner_up_energy": runner_up_energy,
             "best_to_runner_up_energy_margin": energy_margin,
             "energy_weights": dict(_ENERGY_WEIGHTS),
@@ -292,6 +303,29 @@ def evaluate_contextual_micro_cleanup(
             )
         )
     return assignments
+
+
+def contextual_energy_limit(
+    target: Mapping[str, Any], top_two_class_ids: Sequence[int], cfg: Mapping[str, Any]
+) -> float:
+    """Allow a larger energy only when independent source evidence supports it.
+
+    Used by proposal generation and replay. Area, borders, protected targets,
+    and runner-up ambiguity are checked separately by both callers.
+    """
+    base = float(cfg["maximum_selected_energy"])
+    supported = (
+        target["target_class_id"] in top_two_class_ids
+        and float(target["mean_target_probability_on_source"])
+        >= float(cfg["supported_minimum_probability"])
+        and float(target["source_boundary_fraction"])
+        >= float(cfg["supported_minimum_boundary_fraction"])
+        and float(target["weak_color_boundary_score"])
+        >= float(cfg["supported_minimum_boundary_similarity"])
+        and float(target["region_mean_color_similarity"])
+        >= float(cfg["supported_minimum_region_similarity"])
+    )
+    return max(base, float(cfg["supported_maximum_energy"])) if supported else base
 
 
 def _evaluate_target(
@@ -552,6 +586,11 @@ def _select_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "semantic_consensus_minimum_margin",
         "semantic_consensus_minimum_purity",
         "maximum_selected_energy",
+        "supported_maximum_energy",
+        "supported_minimum_probability",
+        "supported_minimum_boundary_fraction",
+        "supported_minimum_boundary_similarity",
+        "supported_minimum_region_similarity",
         "minimum_energy_margin",
         "standalone_tree_minimum_probability",
         "standalone_tree_minimum_margin",

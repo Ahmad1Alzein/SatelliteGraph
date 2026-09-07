@@ -221,6 +221,13 @@ refinement:
       # Relative best-neighbor selection is not enough for unattended runs:
       # require both an absolute energy ceiling and separation from runner-up.
       maximum_selected_energy: 0.40
+      # Four-tile sweep: most independently supported corrections plateau at .50.
+      # This ceiling only applies when every support gate below also passes.
+      supported_maximum_energy: 0.50
+      supported_minimum_probability: 0.20
+      supported_minimum_boundary_fraction: 0.25
+      supported_minimum_boundary_similarity: 0.50
+      supported_minimum_region_similarity: 0.50
       minimum_energy_margin: 0.02
       standalone_tree_minimum_area_pixels: 20
       standalone_tree_minimum_probability: 0.55
@@ -329,3 +336,32 @@ stage3:
 
   output:
     root_directory: artifacts/stage3
+
+# Stage 4 combines any selected set of completed tile graphs. Exact Stage 1
+# source-pixel offsets place tiles; conservative overlap-local mask matching
+# reconciles duplicate objects, and coverage-aware central-pixel ownership
+# removes duplicated overlap pixels before the global adjacency graph is rebuilt.
+stage4:
+  analysis:
+    # Unresolved <=40-pixel regions remain in graph.json for audit. The normal
+    # combined view uses the same minimum mapping unit as Stage 3.
+    minimum_unknown_area_pixels: 41
+    minimum_shared_boundary_pixels: 2
+  input:
+    root_directory: artifacts/stage3
+    phase_directory: 01_graph
+  overlap:
+    method: mutual_best_mask_overlap
+    minimum_intersection_pixels: 4
+    minimum_intersection_over_smaller: 0.60
+    minimum_intersection_over_union: 0.20
+    minimum_bidirectional_coverage: 0.40
+    unknown_minimum_intersection_over_smaller: 0.80
+    require_same_class: true
+    require_mutual_best: true
+  ownership:
+    method: maximum_distance_to_tile_edge_then_confidence
+  adjacency:
+    minimum_shared_boundary_pixels: 1
+  output:
+    root_directory: artifacts/stage4

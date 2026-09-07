@@ -285,8 +285,10 @@ def consolidate_micro_components(
     before publication, secondary components below the configured object-area
     floor are consolidated with the largest surviving sibling from the same
     immutable Stage 2 object.  No raster pixel or semantic value changes.
-    Larger disconnected components remain separate because they may represent
-    genuinely distinct objects that Stage 2 grouped together.
+    Larger disconnected components may remain separate because they can be
+    genuine objects, but topology-only promotion is capped so it cannot make
+    the published count exceed Stage 2 plus explicitly approved semantic-split
+    growth.
     """
 
     _validate_result(result)
@@ -322,6 +324,7 @@ def consolidate_micro_components(
     entries: list[tuple[int, str, list[int]]] = []
     consolidated_fragment_count = 0
     promoted_large_component_count = 0
+    promoted_entries: list[tuple[str, int]] = []
     for group_id, indices in sorted(grouped.items()):
         ordered = sorted(
             indices,
@@ -353,12 +356,13 @@ def consolidate_micro_components(
             entries.append(
                 (
                     int(result.records[anchor]["instance_id"]),
-                    str(result.records[anchor]["entity_id"]),
+                    group_id,
                     [anchor],
                 )
             )
         for index in large:
             promoted_large_component_count += 1
+            promoted_entries.append((group_id, index))
             entries.append(
                 (
                     int(result.records[index]["instance_id"]),
@@ -374,6 +378,47 @@ def consolidate_micro_components(
                 [index],
             )
         )
+
+    semantic_split_growth = sum(
+        max(0, len(operation.get("output_entity_ids", [])) - 1)
+        for operation in result.operations
+        if operation.get("operation_type") == "semantic_split"
+        and operation.get("status") == "applied"
+    )
+    maximum_topology_safe_count = source_stage2_segment_count + semantic_split_growth
+    budget_consolidated_count = 0
+    if len(entries) > maximum_topology_safe_count:
+        promotion_order = sorted(
+            promoted_entries,
+            key=lambda value: (
+                int(result.records[value[1]].get("area_pixels", 0)),
+                int(result.records[value[1]].get("instance_id", value[1] + 1)),
+                value[0],
+            ),
+        )
+        for group_id, promoted_index in promotion_order:
+            if len(entries) <= maximum_topology_safe_count:
+                break
+            anchor_position = next(
+                position
+                for position, entry in enumerate(entries)
+                if entry[1] == group_id and promoted_index not in entry[2]
+            )
+            promoted_position = next(
+                position
+                for position, entry in enumerate(entries)
+                if entry[2] == [promoted_index]
+            )
+            anchor_entry = entries[anchor_position]
+            entries[anchor_position] = (
+                min(anchor_entry[0], int(result.records[promoted_index]["instance_id"])),
+                group_id,
+                [*anchor_entry[2], promoted_index],
+            )
+            entries.pop(promoted_position)
+            promoted_large_component_count -= 1
+            consolidated_fragment_count += 1
+            budget_consolidated_count += 1
     entries.sort(key=lambda value: (value[0], value[1]))
 
     rebuilt_map = np.zeros(result.instance_map.shape, dtype=np.int32)
@@ -456,6 +501,10 @@ def consolidate_micro_components(
                 "promoted_large_secondary_component_count": (
                     promoted_large_component_count
                 ),
+                "budget_consolidated_component_count": budget_consolidated_count,
+                "semantic_split_growth_allowance": semantic_split_growth,
+                "maximum_topology_safe_output_count": maximum_topology_safe_count,
+                "topology_alone_cannot_increase_object_count": True,
                 "multipart_object_count": multipart_object_count,
                 "all_pixels_preserved": True,
                 "semantic_map_unchanged": True,
@@ -1873,8 +1922,20 @@ def _validate_automatic_contextual_absorb(
         and top_purity >= float(cleanup["semantic_consensus_minimum_purity"])
     )
     if not semantic_consensus:
+        from .contextual_cleanup import contextual_energy_limit
+
         selected_energy = float(expected_row["energy"])
-        if selected_energy > float(cleanup["maximum_selected_energy"]):
+        energy_limit = contextual_energy_limit(
+            {
+                **expected_row,
+                "target_class_id": target_class_id,
+                "mean_target_probability_on_source": target_probability,
+                "source_boundary_fraction": boundary_fraction,
+            },
+            order[:2],
+            cleanup,
+        )
+        if selected_energy > energy_limit:
             raise ValueError("Contextual cleanup energy is above the automatic maximum")
         ranked_rows = sorted(
             eligible_rows,

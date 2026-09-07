@@ -1,5 +1,9 @@
 # Refinement Stage: Teacher Discussion Document
 
+The numerical examples below describe earlier runs. For the updated four-tile
+cleanup, evidence-gated thresholds, and full versus analysis graph comparison,
+see [Unknown-region cleanup](unknown-cleanup-calibration.md).
+
 ## 1. Purpose
 
 The refinement stage sits between the final Stage 2 segmentation and the Stage
@@ -83,8 +87,8 @@ Stage 2 originally allowed 8-connected components. Stage 3 adjacency uses
 4-connectivity: pixels must share a full side, not only a corner.
 
 Refinement therefore divides every disconnected or corner-only-connected mask
-into deterministic 4-connected components. Each child receives a new local ID
-but retains:
+into deterministic 4-connected components **internally**. Each child receives a
+temporary local ID for evidence and replay but retains:
 
 - its Stage 2 parent ID;
 - component index and component count;
@@ -92,7 +96,15 @@ but retains:
 - coordinates and polygon geometry; and
 - an explicit `split_components` lineage record.
 
-This operation changes entity topology but does not change semantic pixels.
+After proposal decisions and unknown cleanup, a secondary component must have
+at least 41 pixels to become a published object. Smaller topology-only pieces
+are consolidated back into the largest surviving sibling from the same Stage 2
+object. Their pixels remain exact and appear as a multipart object, but they do
+not create extra graph nodes. Crossing the 41-pixel floor makes a component
+eligible, not automatically promoted: a hard budget consolidates the weakest
+eligible pieces when needed so topology alone cannot publish more objects than
+Stage 2. Only explicit approved semantic splits add to that budget. This
+identity operation does not change semantic pixels.
 
 ### Step 3: Measure adjacency and similarity
 
@@ -572,11 +584,13 @@ pipeline rejects:
 - decisions for deterministic connectivity splits;
 - hard class-policy vetoes;
 - conflicting operations touching the same source; and
-- any result with gaps, overlaps, disconnected IDs, or metadata mismatch.
+- any result with gaps, overlaps, an undeclared disconnected ID, or metadata
+  mismatch.
 
 Only `approved` semantic operations are replayed. `rejected` and `uncertain`
-remain unapplied but preserve the review decision. Automatic connectivity and
-bounded micro-unknown cleanup still run.
+remain unapplied but preserve the review decision. Internal connectivity
+analysis, micro-component identity consolidation, and bounded micro-unknown
+cleanup still run.
 
 #### D. Current tile example
 
@@ -622,12 +636,14 @@ the lossless source for auditing and changing cleanup policy later.
 4. It excludes from the selected view:
 
 - remaining unknown nodes through 40 pixels;
-- nodes through 40 pixels created only by connectivity splitting; and
 - edges supported by fewer than 2 shared pixel sides.
 
-The filtering is lineage-aware. It preserves eight small native road/building
-objects that a global area filter would incorrectly hide. Every excluded node
-and edge remains in `graph.json` with an explicit exclusion reason.
+Topology-only secondary pieces through 40 pixels are already consolidated into
+their parent identities before Stage 3, so they are not nodes that need visual
+filtering. The remaining filtering is lineage-aware and preserves small native
+road/building objects that a global area filter would incorrectly hide. Every
+excluded node and edge remains in `graph.json` with an explicit exclusion
+reason.
 
 > بالعربي: لا نحذف المعلومات الأصلية. لدينا graph كامل للتدقيق وgraph نظيف
 > للاستخدام العملي في المرحلة التالية.
@@ -638,45 +654,60 @@ and edge remains in `graph.json` with an explicit exclusion reason.
 
 | Measurement | Stage 2 | Refined |
 |---|---:|---:|
-| Total segments | 893 | 507 |
-| Unknown segments | 601 | 87 |
-| Unknown pixels | 10,074 | 6,961 |
-| Unknown single-pixel segments | 228 | 8 |
+| Total segments | 893 | 743 |
+| Unknown segments | 601 | 424 |
+| Unknown pixels | 10,074 | 8,985 |
+| Unknown single-pixel segments | 228 | 165 |
 
 Applied operations:
 
-- 227 deterministic connectivity splits;
-- 926 automatic micro-unknown absorbs;
-- 1,153 total operations; and
-- 3,113 semantically relabeled pixels.
+- 227 deterministic connectivity splits used for internal replay;
+- 311 automatic micro-unknown absorbs;
+- 538 total recorded operations; and
+- 1,089 semantically relabeled pixels.
 
-The 926 absorbs break down as follows:
+The 311 absorbs break down as follows:
 
 - 43 strict-rule absorbs covering 125 pixels;
-- 883 contextual-rule absorbs covering 2,988 pixels;
+- 268 contextual-rule absorbs covering 964 pixels;
 - 82 operations labelled `semantic_consensus`; and
-- 844 operations labelled `contextual`.
+- 229 operations labelled `contextual`.
 
 Of the 960 normalized micro-unknown candidates evaluated by the contextual
-pass, 926 were absorbed, 3 likely standalone objects were preserved, and 31
+pass, 311 were absorbed, 3 likely standalone objects were preserved, and 646
 abstained. One same-class merge proposal remains pending and was not applied.
+
+The important node accounting is:
+
+```text
+893 Stage 2 objects
+   -> 1,433 internal four-connected components
+   -> 1,122 internal components after 311 unknown absorbs
+   -> 743 published objects after consolidating 379 micro-components
+```
+
+Six large secondary components met the promotion floor and fit within the hard
+object-count budget. The final 743-object result is 150 objects smaller than
+Stage 2, so connectivity analysis no longer causes the published node count to
+grow. The result contains 579
+single-part polygons and 164 explicitly recorded multipart objects.
 
 Validation result:
 
 - 262,144 valid pixels assigned;
 - zero gaps;
 - zero overlaps;
-- zero disconnected final instance IDs; and
+- zero undeclared disconnected final instance IDs; and
 - all masks and semantic records agree.
 
 ### Graph result
 
 | Product | Nodes | Edges | Intended use |
 |---|---:|---:|---|
-| Full audit graph | 507 | 1,125 | Complete provenance and topology |
-| Low-noise analysis graph | 347 | 781 | Stage 4 and normal analysis |
+| Full audit graph | 743 | 1,706 | Stage 4 input and complete provenance |
+| Low-noise analysis graph | 350 | 774 | Normal downstream analysis |
 
-The analysis view suppresses 160 unique micro/topology-noise nodes. It keeps 53
+The analysis view suppresses 393 remaining micro-unknown nodes. It keeps 55
 larger unknown regions because assigning them automatically would create false
 semantic certainty.
 
@@ -758,8 +789,11 @@ artifacts/stage3/IKONOS_2005-002__tile_00003/01_graph/graph.json
 artifacts/stage3/IKONOS_2005-002__tile_00003/01_graph/graph_analysis.json
 ```
 
-For Stage 4, use `graph_analysis.json`. Use `graph.json` when auditing excluded
-objects, verifying provenance, or testing a different cleanup policy.
+Stage 4 uses `graph.json` plus the exact refined raster to reconcile duplicate
+geometry without losing provenance. Use `graph_analysis.json` for normal
+low-noise downstream analysis of an individual tile. The combined Stage 4
+graph records all source members so an audit can still inspect excluded or
+uncertain objects.
 
 ## 12. Short presentation summary
 

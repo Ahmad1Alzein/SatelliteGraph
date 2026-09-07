@@ -32,7 +32,7 @@ satellitegraph.stage3.tile-adjacency-graph.v2
 
 This stage handles one tile only. It does not reconcile overlapping tiles,
 merge duplicate objects, assign source-wide object IDs, or create cross-tile
-edges. Those operations belong to the deferred Stage 4.
+edges. Those operations belong to Stage 4.
 
 ## 2. Authoritative input contract
 
@@ -77,8 +77,10 @@ The refinement invariants are preserved:
 - valid segments use contiguous instance IDs `1..N`;
 - `segments[i]` and `masks[i]` correspond to instance ID `i + 1`; and
 - every valid pixel belongs to exactly one final segment; and
-- every final instance is four-connected and carries replayable lineage to
-  its immutable Stage 2 source record or records.
+- every final instance is either four-connected or an explicitly declared
+  multipart object formed by consolidating topology-only micro-components; and
+- every instance carries replayable lineage to its immutable Stage 2 source
+  record or records.
 
 ## 3. Exact adjacency semantics
 
@@ -172,8 +174,10 @@ refinement record, and its immutable Stage 2 ancestry.
 
 The graph polygon is the actual mask boundary. This differs from the
 bounding-box footprints inside the refined record's `coordinates` mapping.
-The graph schema supports `Polygon` and `MultiPolygon`; completed refinement
-normally emits one four-connected component per instance.
+The graph schema supports `Polygon` and `MultiPolygon`. A `MultiPolygon` is used
+when Stage 2R keeps exact micro-fragment pixels under their original parent
+object instead of promoting each fragment to a new graph node. Its refinement
+record declares the exact `connected_component_count`.
 
 ### 5.3 Refinement metadata and immutable Stage 2 ancestry
 
@@ -338,17 +342,15 @@ view without changing the authoritative graph:
 - all classes below `minimum_display_node_area_pixels` are excluded;
 - `unknown` nodes below `minimum_display_unknown_area_pixels` are excluded while
   equally small known objects remain visible; and
-- known-class nodes created as children of deterministic `split_components`
-  topology normalization are excluded below
-  `minimum_display_topology_fragment_area_pixels`, while native Stage 2 small
-  objects remain visible; and
+- the topology-fragment threshold remains a defensive visualization guard for
+  older refinement products; current Stage 2R products already consolidate
+  topology-only secondary pieces below the object-promotion floor; and
 - edges below `minimum_display_shared_boundary_pixels` shared sides are
   excluded.
 
 With the defaults, all known nodes remain included, unknown nodes through 40
-pixels and known topology-only fragments through 40 pixels are excluded from
-the normal analysis/display view, native small known objects are preserved,
-and a one-side adjacency is excluded from that view.
+pixels are excluded from the normal analysis/display view, native small known
+objects are preserved, and a one-side adjacency is excluded from that view.
 `route_edges_through_contacts: true`
 draws each displayed edge as a polyline through the measured shared-boundary
 contact centroid instead of as a misleading straight centroid-to-centroid
@@ -380,8 +382,9 @@ python -m src stage3 run --tile-id IKONOS_2005-002__tile_00003
 ```
 
 Reviewed semantic decisions can be supplied to `refine apply` with
-`--decisions`; omitting them still applies four-connected normalization and all
-eligible replay-validated `micro-unknown-v1` and `contextual-micro-v1` absorbs,
+`--decisions`; omitting them still applies internal four-connected analysis,
+micro-component identity consolidation, and all eligible replay-validated
+`micro-unknown-v1` and `contextual-micro-v1` absorbs,
 but no review-gated operation. In the one-command form, pass the same document
 with `--refinement-decisions <path>`. `refine apply` regenerates proposals, so a
 separate `refine propose` command is optional unless you want the review bundle.
@@ -506,9 +509,9 @@ Nodes use tile-coordinate spatial positions, not a force-directed layout, so
 their placement corresponds to image components. Node colors represent semantic
 classes, node sizes represent area, and edge widths represent shared-boundary
 strength. By default the renderer suppresses `unknown` nodes through 40 pixels
-and known topology-split fragments through 40 pixels, while preserving native
-small known objects; it also suppresses edges supported by only one shared
-side. A displayed edge passes through
+and edges supported by only one shared side. Topology-only secondary pieces
+through 40 pixels are already part of their parent object rather than separate
+nodes. A displayed edge passes through
 the measured contact centroid even though the optional contact-anchor dot is
 off by default. This makes the spatial reason for adjacency inspectable even
 for concave or irregular segments.
@@ -543,9 +546,9 @@ Stage 3 deliberately remains tile-local:
 - node IDs are tile-qualified, not globally reconciled object IDs; and
 - per-tile coverage does not prove source-wide topological correctness.
 
-Stage 4 must combine graphs only after reconciling overlapping segment geometry
-and provenance. It should match candidate objects in source-pixel or projected
-space, resolve duplicate ownership, preserve all contributing tile/segment IDs,
+Stage 4 combines graphs only after reconciling overlapping segment geometry
+and provenance. It matches candidates in exact source-pixel space, resolves
+duplicate ownership, preserves all contributing tile/segment IDs,
 assign stable global IDs, and then rebuild or merge adjacency without double
 counting overlap seams.
 
@@ -562,9 +565,11 @@ Other current limitations are:
 - labels are disabled by default because real tiles can contain hundreds of
   authoritative nodes.
 
-Use `graph_analysis.json` or `graph_analysis_arrays.npz` as the low-noise graph
-input to Stage 4, while retaining `graph.json`, `graph_arrays.npz`, and the
-refinement manifest as the authoritative audit inputs. Follow
+Stage 4 uses the authoritative `graph.json` and refinement raster because it
+must preserve exact object identity and overlap geometry. Use
+`graph_analysis.json` or `graph_analysis_arrays.npz` for low-noise downstream
+analytics after combination, while retaining `graph.json`, `graph_arrays.npz`,
+and the refinement manifest as audit inputs. Follow
 `source_refinement` and the node ancestry fields when
 an audit must continue back to immutable Stage 2. Do not infer cross-tile
 identity from similarly colored preview pixels or from tile-local node IDs

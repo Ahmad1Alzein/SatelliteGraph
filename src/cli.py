@@ -157,6 +157,31 @@ def parser() -> argparse.ArgumentParser:
         default=None,
         help="Decision provider used with --refine-first (default: refinement.mode)",
     )
+
+    stage4 = commands.add_parser(
+        "stage4",
+        help="Combine selected Stage 3 tile graphs and reconcile their overlaps",
+    )
+    stage4_phases = stage4.add_subparsers(dest="phase", required=True)
+    stage4_combine = stage4_phases.add_parser("combine")
+    stage4_combine.add_argument(
+        "--tile-id",
+        action="append",
+        dest="tile_ids",
+        required=True,
+        help="Completed Stage 3 tile graph to include; repeat for any number of tiles",
+    )
+    stage4_combine.add_argument(
+        "--name",
+        default=None,
+        help="Optional safe output collection name (default: deterministic tile-set hash)",
+    )
+    stage4_combine.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG),
+        help="Single project configuration (default: config.yaml)",
+    )
+    stage4_combine.add_argument("--project-root", default=".")
     return root
 
 
@@ -254,6 +279,15 @@ def main(argv: list[str] | None = None) -> None:
                 if refinement_summary is not None
                 else graph_summary
             )
+        elif args.stage == "stage4":
+            from src.stage4 import combine_tile_graphs
+
+            result = combine_tile_graphs(
+                args.tile_ids,
+                project_root=project_root,
+                config=args.config,
+                output_name=args.name,
+            ).summary()
         else:  # pragma: no cover - argparse restricts the available stages.
             raise ValueError(f"Unsupported stage: {args.stage}")
     except Exception as exc:

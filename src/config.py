@@ -54,9 +54,9 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
 def validate_config(config: dict[str, Any]) -> None:
     """Validate the unified project configuration document.
 
-    Stage 3 remains optional here so existing programmatic Stage 2
-    configurations keep working.  Stage 3 entry points require it through
-    :func:`select_stage3_config`.
+    Later stages remain optional here so existing programmatic Stage 2
+    configurations keep working. Their entry points require the relevant
+    section through the stage-specific selector.
     """
     _require_mapping(config, "configuration")
     _require_keys(config, {"project", "stage2"}, "configuration")
@@ -86,6 +86,8 @@ def validate_config(config: dict[str, Any]) -> None:
         validate_refinement_config(config["refinement"])
     if "stage3" in config:
         validate_stage3_config(config["stage3"])
+    if "stage4" in config:
+        validate_stage4_config(config["stage4"])
 
 
 def validate_project_config(config: dict[str, Any]) -> None:
@@ -357,6 +359,69 @@ def validate_refinement_config(config: dict[str, Any]) -> None:
     select(config)
 
 
+def validate_stage4_config(config: dict[str, Any]) -> None:
+    """Validate multi-tile graph stitching and overlap reconciliation."""
+
+    config = _require_mapping(config, "stage4")
+    _require_keys(config, {"input", "overlap", "ownership", "adjacency", "output"}, "stage4")
+    input_config = _require_mapping(config["input"], "stage4.input")
+    _require_keys(input_config, {"root_directory", "phase_directory"}, "stage4.input")
+    for name in ("root_directory", "phase_directory"):
+        if not isinstance(input_config[name], str) or not input_config[name].strip():
+            raise ValueError(f"stage4.input.{name} must be a non-empty path")
+    overlap = _require_mapping(config["overlap"], "stage4.overlap")
+    _require_keys(
+        overlap,
+        {
+            "method",
+            "minimum_intersection_pixels",
+            "minimum_intersection_over_smaller",
+            "minimum_intersection_over_union",
+            "minimum_bidirectional_coverage",
+            "unknown_minimum_intersection_over_smaller",
+            "require_same_class",
+            "require_mutual_best",
+        },
+        "stage4.overlap",
+    )
+    if overlap["method"] != "mutual_best_mask_overlap":
+        raise ValueError("stage4.overlap.method must be 'mutual_best_mask_overlap'")
+    _positive_int(overlap["minimum_intersection_pixels"], "stage4.overlap.minimum_intersection_pixels")
+    for name in (
+        "minimum_intersection_over_smaller",
+        "minimum_intersection_over_union",
+        "minimum_bidirectional_coverage",
+        "unknown_minimum_intersection_over_smaller",
+    ):
+        value = _number(overlap[name], f"stage4.overlap.{name}")
+        if not 0 <= value <= 1:
+            raise ValueError(f"stage4.overlap.{name} must be between zero and one")
+    for name in ("require_same_class", "require_mutual_best"):
+        if not isinstance(overlap[name], bool):
+            raise ValueError(f"stage4.overlap.{name} must be a boolean")
+    ownership = _require_mapping(config["ownership"], "stage4.ownership")
+    _require_keys(ownership, {"method"}, "stage4.ownership")
+    if ownership["method"] != "maximum_distance_to_tile_edge_then_confidence":
+        raise ValueError(
+            "stage4.ownership.method must be "
+            "'maximum_distance_to_tile_edge_then_confidence'"
+        )
+    adjacency = _require_mapping(config["adjacency"], "stage4.adjacency")
+    _require_keys(adjacency, {"minimum_shared_boundary_pixels"}, "stage4.adjacency")
+    if _positive_int(
+        adjacency["minimum_shared_boundary_pixels"],
+        "stage4.adjacency.minimum_shared_boundary_pixels",
+    ) != 1:
+        raise ValueError("Stage 4 must preserve every shared pixel-side adjacency")
+    output = _require_mapping(config["output"], "stage4.output")
+    _require_keys(output, {"root_directory"}, "stage4.output")
+    if not isinstance(output["root_directory"], str) or not output["root_directory"].strip():
+        raise ValueError("stage4.output.root_directory must be a non-empty path")
+    analysis = config.get("analysis", {})
+    for key, default in (("minimum_unknown_area_pixels", 41), ("minimum_shared_boundary_pixels", 2)):
+        _positive_int(analysis.get(key, default), f"stage4.analysis.{key}")
+
+
 def select_project_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return only project paths and tiling settings."""
     project = copy.deepcopy(_require_mapping(config.get("project"), "project"))
@@ -381,6 +446,16 @@ def select_stage3_config(config: dict[str, Any]) -> dict[str, Any]:
     if config.get("_config_path"):
         stage3["_config_path"] = config["_config_path"]
     return stage3
+
+
+def select_stage4_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return validated Stage 4 settings."""
+
+    stage4 = copy.deepcopy(_require_mapping(config.get("stage4"), "stage4"))
+    validate_stage4_config(stage4)
+    if config.get("_config_path"):
+        stage4["_config_path"] = config["_config_path"]
+    return stage4
 
 
 def select_refinement_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -442,6 +517,12 @@ def stage3_config(project_config: dict[str, Any]) -> dict[str, Any]:
     return select_stage3_config(project_config)
 
 
+def stage4_config(project_config: dict[str, Any]) -> dict[str, Any]:
+    """Public selector for multi-tile graph-combination settings."""
+
+    return select_stage4_config(project_config)
+
+
 def refinement_config(project_config: dict[str, Any]) -> dict[str, Any]:
     """Public selector for reversible Stage 2R refinement settings."""
 
@@ -461,6 +542,12 @@ def load_landscape_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
 def load_stage3_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
     """Load the unified YAML and select Stage 3 graph settings."""
     return select_stage3_config(load_config(path))
+
+
+def load_stage4_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
+    """Load the unified YAML and select Stage 4 graph-combination settings."""
+
+    return select_stage4_config(load_config(path))
 
 
 def load_refinement_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
@@ -579,6 +666,12 @@ def landscape_config_hash(config: dict[str, Any], phase: str) -> str:
 def stage3_config_hash(config: dict[str, Any]) -> str:
     """Hash graph behavior plus the derived Stage 2 artifact location."""
     return stable_hash(select_stage3_config(config))
+
+
+def stage4_config_hash(config: dict[str, Any]) -> str:
+    """Hash multi-tile graph-combination behavior and input location."""
+
+    return stable_hash(select_stage4_config(config))
 
 
 def refinement_config_hash(config: dict[str, Any]) -> str:
