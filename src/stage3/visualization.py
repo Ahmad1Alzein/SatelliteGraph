@@ -1080,6 +1080,8 @@ def _select_display_graph(
 def _node_is_topology_fragment(record: Mapping[str, Any]) -> bool:
     """Recognize a child created by deterministic connectivity splitting."""
 
+    if "is_topology_fragment" in record:
+        return bool(record["is_topology_fragment"])
     refined = record.get("refinement_metadata")
     if not isinstance(refined, Mapping):
         return False

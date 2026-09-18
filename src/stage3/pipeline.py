@@ -20,12 +20,13 @@ from src.refinement import load_refinement_result
 
 from .adjacency import build_adjacency_edges
 from .config import config_hash
-from .geometry import build_node_geometries
+from .geometry import build_node_geometries, spatial_context
 from .schema import (
     ADJACENCY_DEFINITION,
     ANALYSIS_SCHEMA_VERSION,
     REFINEMENT_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
     make_edge_id,
     make_node_id,
     validate_analysis_graph_document,
@@ -56,7 +57,7 @@ class Stage3Result:
         display = self.report.get("visualization_graph", {})
         return {
             "status": "complete",
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": self.report["schema_version"],
             "tile_id": self.tile_id,
             "output_directory": str(self.output_directory),
             "node_count": len(self.nodes),
@@ -171,6 +172,7 @@ def run_stage3(
             stage3_config=stage3_config,
             inputs=inputs,
             before_graph=before_graph,
+            node_geometries=node_geometries,
             started=started,
         )
         progress.finish()
@@ -192,7 +194,7 @@ def load_stage3_result(output_directory: str | Path) -> Stage3Result:
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Stage 3 manifest not found: {manifest_path}")
     artifact_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if artifact_manifest.get("schema_version") != SCHEMA_VERSION:
+    if artifact_manifest.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError(f"Unsupported Stage 3 result schema: {artifact_manifest.get('schema_version')!r}")
     if artifact_manifest.get("status") != "complete":
         raise ValueError(f"Stage 3 result is not complete: {artifact_manifest.get('status')!r}")
@@ -206,9 +208,13 @@ def load_stage3_result(output_directory: str | Path) -> Stage3Result:
         raise FileNotFoundError(f"Stage 3 graph, analysis graph, or report is missing from: {directory}")
     graph_document = json.loads(graph_path.read_text(encoding="utf-8"))
     validate_graph_document(graph_document)
+    if graph_document["schema_version"] != artifact_manifest["schema_version"]:
+        raise ValueError("Stage 3 manifest and graph schemas disagree")
     analysis_document = json.loads(analysis_graph_path.read_text(encoding="utf-8"))
     validate_analysis_graph_document(analysis_document, graph_document)
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("schema_version") != graph_document["schema_version"]:
+        raise ValueError("Stage 3 report and graph schemas disagree")
     tile_id = str(artifact_manifest.get("tile_id", ""))
     if not tile_id or graph_document["graph"].get("tile_id") != tile_id:
         raise ValueError("Stage 3 manifest and graph tile IDs disagree")
@@ -313,7 +319,7 @@ def _validate_persisted_artifacts(
 
     analysis_node_count = len(analysis_document["nodes"])
     analysis_edge_count = len(analysis_document["edges"])
-    if artifact_manifest.get("analysis_schema_version") != ANALYSIS_SCHEMA_VERSION:
+    if artifact_manifest.get("analysis_schema_version") != analysis_document["schema_version"]:
         raise ValueError("Stage 3 manifest has an unsupported analysis graph schema")
     if (
         int(artifact_manifest.get("analysis_node_count", -1)) != analysis_node_count
@@ -322,7 +328,7 @@ def _validate_persisted_artifacts(
         raise ValueError("Stage 3 manifest counts disagree with graph_analysis.json")
     report_analysis = report.get("analysis_graph")
     if not isinstance(report_analysis, Mapping) or (
-        report_analysis.get("schema_version") != ANALYSIS_SCHEMA_VERSION
+        report_analysis.get("schema_version") != analysis_document["schema_version"]
         or int(report_analysis.get("node_count", -1)) != analysis_node_count
         or int(report_analysis.get("edge_count", -1)) != analysis_edge_count
     ):
@@ -335,7 +341,7 @@ def _validate_persisted_artifacts(
         raise RuntimeError("Stage 3 analysis graph does not match the authoritative graph artifact")
 
     with np.load(expected["graph_arrays"], allow_pickle=False) as arrays:
-        if str(arrays["schema_version"].item()) != SCHEMA_VERSION:
+        if str(arrays["schema_version"].item()) != graph_document["schema_version"]:
             raise ValueError("Stage 3 graph arrays have an unsupported schema")
         if str(arrays["graph_view"].item()) != "authoritative":
             raise ValueError("Stage 3 graph arrays have an invalid graph view")
@@ -350,7 +356,7 @@ def _validate_persisted_artifacts(
             raise ValueError("Stage 3 graph array dimensions disagree with graph.json")
 
     with np.load(expected["analysis_graph_arrays"], allow_pickle=False) as arrays:
-        if str(arrays["schema_version"].item()) != ANALYSIS_SCHEMA_VERSION:
+        if str(arrays["schema_version"].item()) != analysis_document["schema_version"]:
             raise ValueError("Stage 3 analysis graph arrays have an unsupported schema")
         if str(arrays["graph_view"].item()) != "analysis":
             raise ValueError("Stage 3 analysis graph arrays have an invalid graph view")
@@ -560,64 +566,33 @@ def _build_nodes(stage2_result: Any, geometries: Mapping[int, Mapping[str, Any]]
     if set(geometries) != expected_ids:
         raise ValueError("Polygonized Stage 3 node IDs do not match Stage 2 instances")
     tile_id = stage2_result.tile_id
-    source_image_id = stage2_result.tile_metadata.get("source_image_id")
     nodes: list[dict[str, Any]] = []
     for instance_id, stage2_record in enumerate(stage2_result.segments, 1):
         if int(stage2_record.get("instance_id", 0)) != instance_id:
             raise ValueError(f"Stage 2 record order disagrees at instance {instance_id}")
-        geometry = copy.deepcopy(dict(geometries[instance_id]))
-        label = copy.deepcopy(stage2_record.get("label", {}))
+        geometry = geometries[instance_id]
+        label = stage2_record.get("label", {})
         if "id" not in label or "name" not in label:
             raise ValueError(f"Stage 2 instance {instance_id} has no semantic label")
-        spaces = geometry["coordinate_spaces"]
-        representative = {
-            name: copy.deepcopy(value.get("representative_point_xy")) if value.get("available") else None
-            for name, value in spaces.items()
-        }
+        tile_geometry = geometry["coordinate_spaces"]["tile_pixel"]
         metrics = geometry["metrics"]
         boundary = geometry["tile_boundary_contacts"]
         segment_id = str(stage2_record["segment_id"])
         node = {
-            "id": make_node_id(tile_id, segment_id),
             "node_id": make_node_id(tile_id, segment_id),
-            "tile_id": tile_id,
-            "source_image_id": source_image_id,
             "segment_id": segment_id,
             "instance_id": instance_id,
-            "mask_index": int(stage2_record.get("mask_index", instance_id - 1)),
             "segment_type": {"id": int(label["id"]), "name": str(label["name"])},
-            "label": label,
-            "geometry_source": copy.deepcopy(stage2_record.get("geometry_source")),
-            "source": stage2_record.get("source"),
-            "source_code": stage2_record.get("source_code"),
             "area_pixels": int(stage2_record["area_pixels"]),
             "mean_semantic_confidence": stage2_record.get("mean_semantic_confidence"),
-            "quality": {
-                "predicted_iou": stage2_record.get("predicted_iou"),
-                "stability_score": stage2_record.get("stability_score"),
-                "metrics": copy.deepcopy(stage2_record.get("metrics", {})),
-            },
-            "provenance": copy.deepcopy(stage2_record.get("provenance", {})),
-            "explanation": stage2_record.get("explanation"),
             "geometry_type": geometry["geometry_type"],
-            "geometry": geometry,
-            "coordinates": copy.deepcopy(stage2_record.get("coordinates", {})),
-            "representative_point": representative,
-            "representative_point_xy": representative["tile_pixel"],
-            "tile_boundary_contacts": boundary,
+            "geometry": copy.deepcopy(tile_geometry["geometry"]),
+            "centroid_xy": copy.deepcopy(tile_geometry["centroid_xy"]),
+            "bbox_xyxy": copy.deepcopy(tile_geometry["bbox_xyxy"]),
+            "representative_point_xy": copy.deepcopy(tile_geometry["representative_point_xy"]),
+            "perimeter_pixels": float(metrics["perimeter_pixel_units"]),
             "touches_tile_boundary": bool(boundary["touches"]),
-            "geometry_metrics": metrics,
-            "refinement_metadata": copy.deepcopy(stage2_record),
-            "source_stage2_metadata": copy.deepcopy(
-                stage2_record.get(
-                    "stage2_metadata_records",
-                    [stage2_record.get("stage2_metadata", {})],
-                )
-            ),
-            # Compatibility alias for consumers of the v1 graph schema.  It
-            # now means the primary immutable Stage 2 ancestor, while the
-            # exact raster-producing record lives in refinement_metadata.
-            "stage2_metadata": copy.deepcopy(stage2_record.get("stage2_metadata", {})),
+            "is_topology_fragment": _is_topology_fragment_node({"refinement_metadata": stage2_record}),
         }
         if int(metrics["area_pixels"]) != node["area_pixels"]:
             raise ValueError(f"Polygonized area disagrees with Stage 2 instance {instance_id}")
@@ -662,7 +637,6 @@ def _build_edges(
         projected_length = raw.get("shared_boundary_length_projected")
         if isinstance(projected_length, Mapping):
             projected_length = projected_length.get("value") if projected_length.get("available") else None
-        projected_metric = raw.get("shared_boundary", {}).get("projected_length", {})
         source_perimeter = float(geometries[first]["metrics"]["perimeter_pixel_units"])
         target_perimeter = float(geometries[second]["metrics"]["perimeter_pixel_units"])
         source_centroid = geometries[first]["metrics"]["centroid_tile_pixel_xy"]
@@ -673,9 +647,6 @@ def _build_edges(
             "target": target_node["node_id"],
             "source_instance_id": first,
             "target_instance_id": second,
-            "relation": "adjacent",
-            "adjacency_definition": ADJACENCY_DEFINITION,
-            "contact_type": "shared_boundary",
             "shared_boundary_side_count": count,
             "left_right_contact_count": left_right,
             "top_bottom_contact_count": top_bottom,
@@ -683,18 +654,11 @@ def _build_edges(
             "shared_boundary_length_projected": (
                 None if projected_length is None else float(projected_length)
             ),
-            "shared_boundary_projected_unit": raw.get("shared_boundary_projected_unit")
-            or projected_metric.get("unit"),
-            "shared_boundary_projected_crs": raw.get("shared_boundary_projected_crs")
-            or projected_metric.get("crs"),
             "contact_fraction_of_source_pixel_perimeter": count / source_perimeter,
             "contact_fraction_of_target_pixel_perimeter": count / target_perimeter,
-            "contact_fractions": copy.deepcopy(raw.get("contact_fractions", {})),
-            "contact_coordinates": copy.deepcopy(raw.get("contact_coordinates", {})),
-            "source_class_id": source_node["segment_type"]["id"],
-            "source_class": source_node["segment_type"]["name"],
-            "target_class_id": target_node["segment_type"]["id"],
-            "target_class": target_node["segment_type"]["name"],
+            "contact_centroid_tile_pixel_xy": copy.deepcopy(
+                raw["contact_coordinates"]["tile_pixel"]["centroid_xy"]
+            ),
             "same_semantic_class": source_node["segment_type"]["id"]
             == target_node["segment_type"]["id"],
             "centroid_distance_pixels": float(
@@ -703,40 +667,12 @@ def _build_edges(
                     float(target_centroid[1]) - float(source_centroid[1]),
                 )
             ),
-            "centroid_distance_projected": _projected_centroid_distance(
-                geometries[first], geometries[second]
-            ),
         }
         if count <= 0 or left_right + top_bottom != count:
             raise ValueError(f"Adjacency contact counts are inconsistent for {(first, second)}")
         edges.append(edge)
     edges.sort(key=lambda edge: (edge["source_instance_id"], edge["target_instance_id"]))
     return edges
-
-
-def _projected_centroid_distance(
-    first_geometry: Mapping[str, Any], second_geometry: Mapping[str, Any]
-) -> dict[str, Any]:
-    first = first_geometry["coordinate_spaces"]["projected"]
-    second = second_geometry["coordinate_spaces"]["projected"]
-    if first.get("available") and second.get("available"):
-        x1, y1 = first["centroid_xy"]
-        x2, y2 = second["centroid_xy"]
-        projected = first_geometry["metrics"]["projected_perimeter"]
-        return {
-            "available": True,
-            "unavailable_reason": None,
-            "value": float(math.hypot(float(x2) - float(x1), float(y2) - float(y1))),
-            "unit": projected.get("unit"),
-            "crs": first.get("crs"),
-        }
-    return {
-        "available": False,
-        "unavailable_reason": first.get("unavailable_reason") or second.get("unavailable_reason"),
-        "value": None,
-        "unit": None,
-        "crs": first.get("crs") or second.get("crs"),
-    }
 
 
 def _annotate_graph(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
@@ -888,6 +824,8 @@ def _is_topology_fragment_node(node: Mapping[str, Any]) -> bool:
     reset component counters, so the durable operation lineage is authoritative.
     """
 
+    if "is_topology_fragment" in node:
+        return bool(node["is_topology_fragment"])
     record = node.get("refinement_metadata")
     if not isinstance(record, Mapping):
         return False
@@ -923,6 +861,7 @@ def _graph_document(
     stage3_configuration_hash: str,
     analysis_view: Mapping[str, Any],
 ) -> dict[str, Any]:
+    spatial = spatial_context(stage2_result.tile_metadata)
     return {
         "schema_version": SCHEMA_VERSION,
         "graph": {
@@ -938,6 +877,10 @@ def _graph_document(
             "edge_count": len(edges),
             "tile_shape_hw": [int(value) for value in stage2_result.instance_map.shape],
             "tile_metadata": copy.deepcopy(stage2_result.tile_metadata),
+            "projected_measurements": {
+                "unit": spatial.linear_unit if spatial.projected_available else None,
+                "crs": spatial.source_crs_text if spatial.projected_available else None,
+            },
             "coordinate_reference": copy.deepcopy(
                 stage2_result.report.get("coordinate_reference", {})
             ),
@@ -969,6 +912,7 @@ def _persist_result(
     stage3_config: Mapping[str, Any],
     inputs: list[Path],
     before_graph: _BeforeRefinementGraph,
+    node_geometries: Mapping[int, Mapping[str, Any]],
     started: str,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -996,7 +940,11 @@ def _persist_result(
         },
     )
     save_graph_json(graph_path, graph_document)
-    save_graph_arrays(arrays_path, graph_document["nodes"], graph_document["edges"])
+    save_graph_arrays(
+        arrays_path, graph_document["nodes"], graph_document["edges"],
+        tile_id=stage2_result.tile_id,
+        projected_measurements=graph_document["graph"]["projected_measurements"],
+    )
     analysis_document = _analysis_graph_document(graph_document, graph_path)
     validate_analysis_graph_document(analysis_document, graph_document)
     save_graph_json(analysis_graph_path, analysis_document)
@@ -1007,8 +955,9 @@ def _persist_result(
         schema_version=ANALYSIS_SCHEMA_VERSION,
         tile_id=str(graph_document["graph"]["tile_id"]),
         graph_view="analysis",
+        projected_measurements=graph_document["graph"]["projected_measurements"],
     )
-    save_nodes_geojson(nodes_geojson_path, _nodes_geojson(graph_document["nodes"], stage2_result))
+    save_nodes_geojson(nodes_geojson_path, _nodes_geojson(graph_document["nodes"], stage2_result, node_geometries))
     save_adjacency_csv(adjacency_path, graph_document["edges"])
 
     visualization_paths = _save_visualizations(
@@ -1073,8 +1022,8 @@ def _persist_result(
         },
         "validation": {
             "one_node_per_positive_instance": True,
-            "all_refinement_metadata_preserved": True,
-            "source_stage2_lineage_preserved": True,
+            "compact_node_and_edge_metadata": True,
+            "source_audit_artifacts_referenced": True,
             "exact_unsimplified_polygon_geometry": True,
             "every_edge_has_shared_pixel_side": all(
                 int(edge["shared_boundary_side_count"]) > 0
@@ -1210,6 +1159,7 @@ def _analysis_graph_document(
             "coordinate_reference": copy.deepcopy(
                 authoritative_graph.get("coordinate_reference", {})
             ),
+            "projected_measurements": copy.deepcopy(authoritative_graph.get("projected_measurements", {})),
             "selection": copy.deepcopy(authoritative_graph["analysis_view"]),
             "graph_statistics": analysis_statistics,
             "source_graph": {
@@ -1282,15 +1232,18 @@ def _visualization_graph_statistics(
     }
 
 
-def _nodes_geojson(nodes: list[dict[str, Any]], stage2_result: Any) -> dict[str, Any]:
+def _nodes_geojson(
+    nodes: list[dict[str, Any]], stage2_result: Any,
+    geometries: Mapping[int, Mapping[str, Any]],
+) -> dict[str, Any]:
     preferred_space = "tile_pixel"
     for candidate in ("wgs84", "projected", "source_pixel", "tile_pixel"):
-        if all(node["geometry"]["coordinate_spaces"][candidate]["available"] for node in nodes):
+        if all(geometries[node["instance_id"]]["coordinate_spaces"][candidate]["available"] for node in nodes):
             preferred_space = candidate
             break
     features = []
     for node in nodes:
-        spatial = node["geometry"]["coordinate_spaces"][preferred_space]
+        spatial = geometries[node["instance_id"]]["coordinate_spaces"][preferred_space]
         features.append(
             {
                 "type": "Feature",
@@ -1298,8 +1251,8 @@ def _nodes_geojson(nodes: list[dict[str, Any]], stage2_result: Any) -> dict[str,
                 "geometry": copy.deepcopy(spatial["geometry"]),
                 "properties": {
                     "node_id": node["node_id"],
-                    "tile_id": node["tile_id"],
-                    "source_image_id": node["source_image_id"],
+                    "tile_id": stage2_result.tile_id,
+                    "source_image_id": stage2_result.tile_metadata.get("source_image_id"),
                     "segment_id": node["segment_id"],
                     "instance_id": node["instance_id"],
                     "class_id": node["segment_type"]["id"],
@@ -1315,7 +1268,7 @@ def _nodes_geojson(nodes: list[dict[str, Any]], stage2_result: Any) -> dict[str,
         )
     crs = None
     if nodes:
-        crs = nodes[0]["geometry"]["coordinate_spaces"][preferred_space].get("crs")
+        crs = geometries[nodes[0]["instance_id"]]["coordinate_spaces"][preferred_space].get("crs")
     return {
         "type": "FeatureCollection",
         "schema_version": SCHEMA_VERSION,

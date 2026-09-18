@@ -271,7 +271,7 @@ def test_four_neighbour_adjacency_counts_projection_diagonals_and_nodata() -> No
     ]
 
 
-def test_graph_schema_validates_structure_and_preserves_stage2_metadata() -> None:
+def test_legacy_graph_schema_validates_structure_and_preserves_stage2_metadata() -> None:
     tile_id = "scene__tile_00000"
     first_id = make_node_id(tile_id, "segment_a")
     second_id = make_node_id(tile_id, "segment_b")
@@ -287,7 +287,7 @@ def test_graph_schema_validates_structure_and_preserves_stage2_metadata() -> Non
         {"global_x0": 0, "global_y0": 0},
     )
     document = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": "satellitegraph.stage3.tile-adjacency-graph.v2",
         "graph": {
             "tile_id": tile_id,
             "directed": False,
@@ -580,17 +580,21 @@ def test_fake_stage2_to_stage3_public_loader_and_cli(
         "phase_manifest.json",
     }
     for node, refined_record in zip(result.nodes, refined_result.segments):
-        assert node["refinement_metadata"] == refined_record
-        assert node["source_stage2_metadata"]
+        assert "refinement_metadata" not in node
+        assert "source_stage2_metadata" not in node
+        assert "quality" not in node
+        assert "provenance" not in node
         assert node["node_id"] == make_node_id(tile_id, refined_record["segment_id"])
-        assert node["geometry"]["coordinate_spaces"]["tile_pixel"]["available"]
-        assert node["geometry"]["coordinate_spaces"]["projected"]["available"]
-        assert node["geometry"]["coordinate_spaces"]["wgs84"]["available"]
+        assert node["area_pixels"] == refined_record["area_pixels"]
+        assert node["geometry"]["type"] == node["geometry_type"]
+        assert "coordinate_spaces" not in node["geometry"]
 
     with np.load(result.output_directory / "graph_arrays.npz", allow_pickle=False) as arrays:
         assert arrays["edge_index"].shape == (2, len(result.edges))
         assert arrays["instance_ids"].tolist() == list(range(1, len(result.nodes) + 1))
         assert arrays["graph_view"].item() == "authoritative"
+        assert arrays["projected_crs"].item() == SOURCE_CRS
+        assert arrays["projected_length_unit"].item() == result.graph["projected_measurements"]["unit"]
     analysis_document = json.loads(
         (result.output_directory / "graph_analysis.json").read_text(encoding="utf-8")
     )

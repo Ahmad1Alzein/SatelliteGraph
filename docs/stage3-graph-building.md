@@ -8,8 +8,8 @@ tile-local region-adjacency graph:
 - every final refined segment becomes exactly one graph node;
 - every pair of segments that shares at least one pixel side becomes one
   undirected graph edge;
-- the exact refinement record and its immutable Stage 2 ancestry are retained
-  on the node;
+- nodes retain useful graph features; model diagnostics and refinement audit
+  records stay in their original upstream artifacts;
 - exact segment polygons and coordinate metadata are exported; and
 - spatial graph visualizations make the result inspectable beside the
   segmentation.
@@ -27,8 +27,12 @@ delete or redefine graph data.
 The output schema is:
 
 ```text
-satellitegraph.stage3.tile-adjacency-graph.v2
+satellitegraph.stage3.tile-adjacency-graph.v3
 ```
+
+The loader still accepts existing v2 graphs and v1 analysis views. Newly built
+tiles use v3 graphs and v2 analysis views. Run Stage 3 again to compact existing
+tiles; no segmentation/model rerun is needed.
 
 This stage handles one tile only. It does not reconcile overlapping tiles,
 merge duplicate objects, assign source-wide object IDs, or create cross-tile
@@ -115,7 +119,7 @@ For each adjacent pair, Stage 3 records:
 - `shared_boundary_length_projected`: length in source-CRS units when a usable
   affine transform and CRS are available, otherwise `null`.
 
-`minimum_shared_boundary_pixels` is fixed at `1` in schema version 2. Therefore
+`minimum_shared_boundary_pixels` is fixed at `1`. Therefore
 every pair sharing even one pixel side is retained in the authoritative graph.
 The separate analysis/display threshold marks one-side contacts as excluded
 from the low-noise view, but the exact edge remains in `graph.json` and every
@@ -143,66 +147,31 @@ overlapping tiles.
 
 ## 5. Node metadata
 
-Every node contains graph-friendly summary fields, the exact raster-producing
-refinement record, and its immutable Stage 2 ancestry.
-
-### 5.1 Identity and semantic type
-
-| Field | Meaning |
-|---|---|
-| `node_id` | Tile-qualified stable node identifier. |
-| `tile_id` | Canonical Stage 1/2 tile identifier. |
-| `instance_id` | Positive ID in the refined `instance_map`. |
-| `segment_id` | Refined segment identifier. |
-| `mask_index` | Position of the segment mask in `segments.npz`. |
-| `segment_type` | Semantic class ID and name, including `unknown` when applicable. |
-| `degree` | Number of adjacent graph nodes. |
-| `analysis_view` | `included` flag plus explicit exclusion reasons for the preferred low-noise view; it does not affect authoritative membership or degree. |
-
-### 5.2 Geometry and measurements
+Stage 3 selects these fields when creating each node, before writing any tile
+artifact. The authoritative graph and its analysis subgraph both use the same
+compact records. Tile/source identity and georeferencing are stored once in
+`graph.tile_metadata`.
 
 | Field | Meaning |
 |---|---|
-| `area_pixels` | Exact number of pixels assigned to the segment. |
-| `geometry_type` | `Polygon` or `MultiPolygon`. |
-| `geometry` | Exact geometry record containing coordinate spaces, metrics, representative-point method, and tile-boundary contacts. |
-| `representative_point` | Compact point variants used for graph layout and numeric export. |
-| `geometry.coordinate_spaces` | Exact geometry, bbox, centroid, representative point, availability, and CRS for each supported coordinate space. |
-| `geometry.representative_point_method` | Deterministic rule used to select an interior segment pixel center near the raster centroid. |
-| `geometry.metrics` | Pixel area/perimeter/compactness, geometry counts, and projected area/perimeter when available. |
-| `tile_boundary_contacts` | Overall contact plus top/right/bottom/left side counts and exact half-open boundary runs. |
+| `node_id`, `segment_id`, `instance_id` | Stable graph identity and lookup into the refined segmentation. |
+| `segment_type` | Semantic class ID and name only. |
+| `mean_semantic_confidence` | Confidence used for downstream overlap reconciliation. |
+| `area_pixels`, `perimeter_pixels` | Exact pixel area and boundary length. |
+| `geometry_type`, `geometry` | Exact unsimplified Polygon/MultiPolygon GeoJSON in tile pixels, including holes. |
+| `centroid_xy`, `bbox_xyxy` | Tile-pixel centroid and half-open bounding box. |
+| `representative_point_xy` | Interior segment pixel center nearest the raster centroid, with row-major tie breaking. |
+| `touches_tile_boundary` | Whether the region reaches the tile boundary. |
+| `is_topology_fragment` | Small derived flag needed by analysis/display filtering. |
+| `degree`, `connected_component_id`, `is_isolated` | Graph topology summaries. |
+| `analysis_view` | Inclusion flag and exclusion reasons for the analysis/display view. |
 
-The graph polygon is the actual mask boundary. This differs from the
-bounding-box footprints inside the refined record's `coordinates` mapping.
-The graph schema supports `Polygon` and `MultiPolygon`. A `MultiPolygon` is used
-when Stage 2R keeps exact micro-fragment pixels under their original parent
-object instead of promoting each fragment to a new graph node. Its refinement
-record declares the exact `connected_component_count`.
-
-### 5.3 Refinement metadata and immutable Stage 2 ancestry
-
-Schema version 2 distinguishes the record that produced the graph raster from
-the immutable record or records that preceded refinement:
-
-| Field | Meaning |
-|---|---|
-| `refinement_metadata` | Full matching record from `13_refinement`; authoritative for the node's current instance ID, mask, entity policy, and refinement history. |
-| `stage2_metadata` | Compatibility alias containing the primary immutable `12_final` ancestor. |
-| `source_stage2_metadata` | List of all immutable Stage 2 ancestor records, including every contributor when refinement combined regions. |
-
-Together these fields retain, among other data:
-
-- semantic class and the complete `label` evidence;
-- mean semantic confidence;
-- geometry source and label source;
-- SAM/OpenEarthMap/fusion provenance plus refinement operation lineage;
-- pixel area, bounding boxes, centroid, fill ratio, and boundary contact;
-- tile, source/global, projected/world, and WGS84 coordinate metadata; and
-- the human-readable explanation of how geometry and label were selected.
-
-Stage 3 summary fields make common graph queries convenient.
-`refinement_metadata` remains the authoritative segmentation record, while
-`source_stage2_metadata` preserves complete ancestry back to Stage 2.
+SAM predicted IoU/stability, raw model scores, label evidence, model provenance,
+explanations, full refinement history, and copied Stage 2 ancestor records are
+not stored on graph nodes. Repeated coordinate variants, metrics, and boundary
+runs are also omitted. Audit records remain accessible through the graph-level
+`source_refinement` path and checksums, plus each node's segment/instance IDs.
+This reduces each tile independently; Stage 4 is not responsible for trimming.
 
 ## 6. Polygon and coordinate spaces
 
@@ -213,11 +182,12 @@ Pixel conventions remain the same as Stage 2 and Stage 2R:
 - bounding boxes are half-open; and
 - centroids and representative points use pixel-center coordinates.
 
-Exact node polygons are available in tile-pixel space and source/global-pixel
-space. When Stage 2 recovered a usable affine transform and CRS, Stage 3 also
-provides projected geometry and a WGS84 form. When georeferencing is not
-available, the pixel geometries remain valid and the unavailable projected or
-geographic forms are explicitly reported rather than fabricated.
+`graph.json` stores each exact polygon only in tile-pixel coordinates. Source
+pixel coordinates follow from the tile offset; projected/WGS84 coordinates can
+be derived using the affine transform and CRS in `graph.tile_metadata`.
+`nodes.geojson` still exports exact polygons in the best available coordinate
+space (WGS84, projected, source pixels, then tile pixels). Missing
+georeferencing never causes invented world coordinates.
 
 The current geometry contract requires:
 
@@ -226,30 +196,32 @@ geometry:
   simplification_tolerance: 0.0
 ```
 
-Nonzero simplification is rejected in schema version 2. Exact pixel-edge
+Nonzero simplification is rejected. Exact pixel-edge
 geometry is important for reproducible shared-boundary measurements and later
 cross-tile reconciliation.
 
 ## 7. Edge metadata
 
-Every edge has these core fields:
+Each edge retains IDs and representative relationship measurements:
 
 | Field | Meaning |
 |---|---|
 | `edge_id` | Deterministic tile-qualified edge identifier. |
-| `source`, `target` | Canonically ordered node IDs. |
-| `source_instance_id`, `target_instance_id` | Corresponding refined instance IDs. |
-| `relation` | Always `adjacent` in Stage 3 schema version 2. |
-| `adjacency_definition` | `shared_pixel_edge_4_connected`. |
-| endpoint class fields | Class ID and name for each endpoint. |
-| `same_semantic_class` | Whether the two endpoint classes match. |
-| contact counts | Exact shared-side counts by orientation and in total. |
-| boundary lengths | Pixel length and optional projected length. |
-| `contact_coordinates` | Bounds and centroid of the measured shared pixel-side contacts in available coordinate spaces. |
-| `analysis_view` | `included` flag plus exclusion reasons such as an excluded endpoint or one-side contact; the edge remains authoritative. |
+| `source`, `target`, `source_instance_id`, `target_instance_id` | Canonically ordered endpoints. |
+| `same_semantic_class` | Whether endpoint classes match; class details are read from the nodes. |
+| `shared_boundary_side_count`, `left_right_contact_count`, `top_bottom_contact_count` | Exact shared-side counts. |
+| `shared_boundary_length_pixels`, `shared_boundary_length_projected` | Pixel and optional projected lengths. |
+| `contact_fraction_of_source_pixel_perimeter`, `contact_fraction_of_target_pixel_perimeter` | Contact strength relative to each region's perimeter. |
+| `contact_centroid_tile_pixel_xy` | Measured contact centroid used to route graph edges. |
+| `centroid_distance_pixels` | Distance between region centroids. |
+| `analysis_view` | Inclusion flag and exclusion reasons. |
 
-Endpoint class fields intentionally duplicate small pieces of node metadata so
-the adjacency CSV can be analyzed without joining `graph.json` first.
+Repeated relation/adjacency descriptions, endpoint class copies, nested contact
+fractions, and contact coordinate variants are omitted. The adjacency rule is
+stored once at graph level. Projected lengths share the unit and CRS in
+`graph.projected_measurements`; numeric arrays store these once as
+`projected_length_unit` and `projected_crs`. The adjacency CSV uses the same
+graph-level reference.
 
 Stage 3 creates no distance, containment, similarity, road-connectivity, or
 semantic-association edges. Additional relation types require a future schema.
@@ -289,7 +261,9 @@ Before export and when reloading, Stage 3 validates that:
 - node and edge counts match their arrays;
 - node IDs and instance IDs are unique;
 - instance IDs remain contiguous;
-- every node preserves its matching refinement record and Stage 2 ancestry;
+- compact nodes/edges contain only the permitted graph fields;
+- each node's exact polygon agrees with its area, perimeter, and interior point;
+- source audit references and artifact checksums remain consistent;
 - every edge endpoint exists;
 - no self-loop or duplicate edge exists; and
 - every edge has at least one qualifying shared pixel side.
@@ -449,9 +423,9 @@ It contains:
 
 ### `graph.json`
 
-The authoritative, versioned graph document. It preserves nested refinement
-and source Stage 2 metadata, exact polygons, graph metadata, and rich edge
-records without flattening.
+The authoritative, versioned graph document contains compact node/edge
+features and one exact tile-pixel polygon per node. It excludes SAM, semantic
+model, and refinement audit payloads.
 
 ### `graph_arrays.npz`
 
@@ -466,7 +440,7 @@ arrays include:
 - `shared_boundary_length_pixels`; and
 - `shared_boundary_length_projected`, using `NaN` when unavailable.
 
-`graph.json` remains authoritative for nested metadata and geometry.
+`graph.json` remains authoritative for graph features and tile-pixel geometry.
 
 ### `graph_analysis.json` and `graph_analysis_arrays.npz`
 
@@ -483,14 +457,14 @@ two array products from being confused.
 
 ### `adjacency.csv`
 
-A human-inspectable edge table with endpoint IDs/classes, same-class status,
+A human-inspectable edge table with endpoint IDs, same-class status,
 orientation-specific contact counts, and pixel/projected boundary lengths.
 
 ### `nodes.geojson`
 
 Exact node polygons for GIS use. The collection records its coordinate space
 and CRS. Its properties are intentionally convenient and compact; use
-`graph.json` for complete nested refinement and Stage 2 ancestry metadata.
+the original Stage 2/2R artifacts for model diagnostics and refinement ancestry.
 
 ### Visualizations
 
@@ -570,7 +544,7 @@ must preserve exact object identity and overlap geometry. Use
 `graph_analysis.json` or `graph_analysis_arrays.npz` for low-noise downstream
 analytics after combination, while retaining `graph.json`, `graph_arrays.npz`,
 and the refinement manifest as audit inputs. Follow
-`source_refinement` and the node ancestry fields when
+`source_refinement` and the node segment/instance IDs when
 an audit must continue back to immutable Stage 2. Do not infer cross-tile
 identity from similarly colored preview pixels or from tile-local node IDs
 alone.

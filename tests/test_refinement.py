@@ -659,10 +659,20 @@ def test_stage3_consumes_the_refined_segmentation_when_configured(tmp_path: Path
     assert [node["instance_id"] for node in graph.nodes] == [1, 2, 3]
     assert graph.nodes[0]["geometry_type"] == "MultiPolygon"
     for node, refined_record in zip(graph.nodes, refined.segments):
-        assert node["refinement_metadata"] == refined_record
-        assert node["stage2_metadata"] == refined_record["stage2_metadata"]
-        assert node["source_stage2_metadata"] == refined_record["stage2_metadata_records"]
-        assert node["refinement_metadata"]["source_stage2_instance_ids"]
+        assert node["segment_id"] == refined_record["segment_id"]
+        assert node["area_pixels"] == refined_record["area_pixels"]
+        assert node["segment_type"]["id"] == refined_record["label"]["id"]
+        assert "refinement_metadata" not in node
+        assert "stage2_metadata" not in node
+        assert "source_stage2_metadata" not in node
+    from rasterio.features import rasterize
+
+    restored = rasterize(
+        [(node["geometry"], node["instance_id"]) for node in graph.nodes],
+        out_shape=refined.instance_map.shape,
+        dtype="int32",
+    )
+    np.testing.assert_array_equal(restored, refined.instance_map)
     source = graph.graph["source_refinement"]
     assert Path(source["output_directory"]).resolve() == refined.output_directory.resolve()
 

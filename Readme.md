@@ -243,10 +243,13 @@ print(result.summary())
 The default output is `artifacts/stage3/<tile_id>/01_graph/`. It includes the
 authoritative `graph.json`/`graph_arrays.npz`, explicit low-noise
 `graph_analysis.json`/`graph_analysis_arrays.npz`, adjacency CSV, node polygons,
-reports/manifests, and views of the segmentation and spatial graph. Every node
-retains its exact refinement record and complete immutable Stage 2 lineage,
-including semantic type, coordinates, confidence, and provenance, and adds its
-exact pixel-edge polygon.
+reports/manifests, and views of the segmentation and spatial graph. Each tile is compact from creation: nodes keep IDs, semantic class/confidence,
+shape/size/location, and graph topology; edges keep adjacency measurements.
+Exact tile-pixel polygons are stored once per node. SAM/semantic-model
+diagnostics, provenance, repeated coordinate variants, and copied refinement
+histories are omitted from graph records. Original audit data remains in the
+Stage 2/2R artifacts referenced by the graph. Re-run Stage 3 to compact older
+tile graphs without rerunning the models.
 
 `refinement_graph_before_after.png` places the graph reconstructed from
 immutable `12_final` beside the refined graph, both over semantic-class

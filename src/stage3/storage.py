@@ -7,11 +7,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
-from src.stage2.artifacts import atomic_json, atomic_npz
+from src.stage2.artifacts import atomic_npz
 
 from .schema import ADJACENCY_DEFINITION, SCHEMA_VERSION
 
@@ -54,6 +54,7 @@ def save_graph_arrays(
     schema_version: str = SCHEMA_VERSION,
     tile_id: str | None = None,
     graph_view: str = "authoritative",
+    projected_measurements: Mapping[str, Any] | None = None,
 ) -> None:
     """Write compact, pickle-free arrays for efficient downstream graph loading."""
 
@@ -63,7 +64,8 @@ def save_graph_arrays(
     class_ids = np.asarray([int(node["segment_type"]["id"]) for node in nodes], dtype=np.int16)
     area_pixels = np.asarray([int(node["area_pixels"]) for node in nodes], dtype=np.int64)
     representative_points = np.asarray(
-        [node["representative_point"]["tile_pixel"] for node in nodes], dtype=np.float64
+        [node["representative_point_xy"] if "representative_point_xy" in node
+         else node["representative_point"]["tile_pixel"] for node in nodes], dtype=np.float64
     ).reshape(len(nodes), 2)
     if edges:
         edge_index = np.asarray(
@@ -105,6 +107,9 @@ def save_graph_arrays(
         (str(edge["shared_boundary_projected_crs"]) for edge in edges if edge.get("shared_boundary_projected_crs")),
         "",
     )
+    if projected_measurements is not None:
+        projected_unit = str(projected_measurements.get("unit") or "")
+        projected_crs = str(projected_measurements.get("crs") or "")
     graph_tile_id = (
         str(tile_id)
         if tile_id is not None
@@ -141,18 +146,12 @@ def save_adjacency_csv(path: Path, edges: list[dict[str, Any]]) -> None:
         "target",
         "source_instance_id",
         "target_instance_id",
-        "source_class_id",
-        "source_class",
-        "target_class_id",
-        "target_class",
         "same_semantic_class",
         "shared_boundary_side_count",
         "left_right_contact_count",
         "top_bottom_contact_count",
         "shared_boundary_length_pixels",
         "shared_boundary_length_projected",
-        "shared_boundary_projected_unit",
-        "shared_boundary_projected_crs",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -169,9 +168,9 @@ def save_adjacency_csv(path: Path, edges: list[dict[str, Any]]) -> None:
 
 
 def save_nodes_geojson(path: Path, collection: dict[str, Any]) -> None:
-    """Persist the GIS node collection using the project's atomic JSON writer."""
+    """Persist the GIS node collection without pretty-printing polygon arrays."""
 
-    atomic_json(path, collection)
+    save_graph_json(path, collection)
 
 
 __all__ = ["save_adjacency_csv", "save_graph_arrays", "save_graph_json", "save_nodes_geojson"]

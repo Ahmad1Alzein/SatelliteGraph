@@ -3,14 +3,69 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any
 
 
-SCHEMA_VERSION = "satellitegraph.stage3.tile-adjacency-graph.v2"
-ANALYSIS_SCHEMA_VERSION = "satellitegraph.stage3.analysis-view.v1"
+SCHEMA_VERSION = "satellitegraph.stage3.tile-adjacency-graph.v3"
+ANALYSIS_SCHEMA_VERSION = "satellitegraph.stage3.analysis-view.v2"
+SUPPORTED_SCHEMA_VERSIONS = {SCHEMA_VERSION, "satellitegraph.stage3.tile-adjacency-graph.v2"}
+SUPPORTED_ANALYSIS_SCHEMA_VERSIONS = {ANALYSIS_SCHEMA_VERSION, "satellitegraph.stage3.analysis-view.v1"}
 STAGE2_SCHEMA_VERSION = "satellitegraph.stage2.full-segmentation.v1"
 REFINEMENT_SCHEMA_VERSION = "satellitegraph.stage2-refinement.v1"
 ADJACENCY_DEFINITION = "shared_pixel_edge_4_connected"
+
+COMPACT_NODE_FIELDS = {
+    "node_id", "segment_id", "instance_id", "segment_type", "area_pixels",
+    "mean_semantic_confidence", "geometry_type", "geometry", "centroid_xy",
+    "bbox_xyxy", "representative_point_xy", "perimeter_pixels",
+    "touches_tile_boundary", "is_topology_fragment", "degree",
+    "connected_component_id", "is_isolated", "analysis_view",
+}
+COMPACT_EDGE_FIELDS = {
+    "edge_id", "source", "target", "source_instance_id", "target_instance_id",
+    "shared_boundary_side_count", "left_right_contact_count", "top_bottom_contact_count",
+    "shared_boundary_length_pixels", "shared_boundary_length_projected",
+    "contact_fraction_of_source_pixel_perimeter", "contact_fraction_of_target_pixel_perimeter",
+    "contact_centroid_tile_pixel_xy", "same_semantic_class", "centroid_distance_pixels",
+    "analysis_view",
+}
+
+
+def _validate_xy(value: Any, name: str, size: int = 2) -> None:
+    if (not isinstance(value, (list, tuple)) or len(value) != size
+            or not all(isinstance(item, (int, float)) and math.isfinite(item) for item in value)):
+        raise ValueError(f"Invalid {name}")
+
+
+def _validate_compact_node(node: Mapping[str, Any], tile_id: str) -> None:
+    from shapely.geometry import Point, shape
+
+    if set(node) != COMPACT_NODE_FIELDS:
+        raise ValueError(f"Node {node['node_id']!r} has invalid compact fields")
+    if not node["segment_id"] or node["node_id"] != make_node_id(tile_id, node["segment_id"]):
+        raise ValueError("Stage 3 node identity disagrees with segment ID")
+    segment_type = node["segment_type"]
+    if (not isinstance(segment_type, Mapping) or set(segment_type) != {"id", "name"}
+            or segment_type["id"] is None or not segment_type["name"]):
+        raise ValueError("Stage 3 node has no semantic segment type")
+    geometry = node["geometry"]
+    if (not isinstance(geometry, Mapping) or set(geometry) != {"type", "coordinates"}
+            or geometry["type"] not in {"Polygon", "MultiPolygon"}
+            or geometry["type"] != node["geometry_type"]):
+        raise ValueError("Stage 3 node has invalid tile-pixel geometry")
+    polygon = shape(geometry)
+    if polygon.is_empty or not polygon.is_valid:
+        raise ValueError("Stage 3 node has invalid tile-pixel geometry")
+    if int(node["area_pixels"]) <= 0 or not math.isclose(polygon.area, node["area_pixels"], abs_tol=1e-7):
+        raise ValueError("Stage 3 node has inconsistent pixel area")
+    if not math.isclose(polygon.length, node["perimeter_pixels"], abs_tol=1e-7):
+        raise ValueError("Stage 3 node has inconsistent pixel perimeter")
+    _validate_xy(node["representative_point_xy"], "node representative point")
+    _validate_xy(node["centroid_xy"], "node centroid")
+    _validate_xy(node["bbox_xyxy"], "node bounding box", 4)
+    if not polygon.covers(Point(node["representative_point_xy"])):
+        raise ValueError("Stage 3 node representative point is outside its geometry")
 
 
 def make_node_id(tile_id: str, segment_id: str) -> str:
@@ -29,7 +84,7 @@ def make_edge_id(tile_id: str, first_instance_id: int, second_instance_id: int) 
 def validate_graph_document(document: Mapping[str, Any]) -> None:
     """Validate the structural invariants of a persisted Stage 3 graph."""
 
-    if document.get("schema_version") != SCHEMA_VERSION:
+    if document.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError(f"Unsupported Stage 3 graph schema: {document.get('schema_version')!r}")
     metadata = document.get("graph")
     nodes = document.get("nodes")
@@ -49,6 +104,7 @@ def validate_graph_document(document: Mapping[str, Any]) -> None:
     if int(metadata.get("edge_count", -1)) != len(edges):
         raise ValueError("Stage 3 graph edge_count does not match edges")
 
+    compact = document["schema_version"] == SCHEMA_VERSION
     node_ids: set[str] = set()
     instance_ids: set[int] = set()
     node_id_by_instance: dict[int, str] = {}
@@ -62,46 +118,49 @@ def validate_graph_document(document: Mapping[str, Any]) -> None:
             raise ValueError(f"Duplicate or empty Stage 3 node ID: {node_id!r}")
         if instance_id <= 0 or instance_id in instance_ids:
             raise ValueError(f"Duplicate or invalid Stage 3 instance ID: {instance_id}")
-        segmentation_metadata = node.get("refinement_metadata", node.get("stage2_metadata"))
-        if (
-            not isinstance(segmentation_metadata, Mapping)
-            or int(segmentation_metadata.get("instance_id", 0)) != instance_id
-        ):
-            raise ValueError(
-                f"Node {node_id!r} does not preserve matching segmentation metadata"
-            )
-        area_pixels = int(node.get("area_pixels", 0))
-        if area_pixels <= 0 or int(segmentation_metadata.get("area_pixels", 0)) != area_pixels:
-            raise ValueError(f"Node {node_id!r} has inconsistent pixel area")
-        segment_type = node.get("segment_type")
-        if not isinstance(segment_type, Mapping) or segment_type.get("id") is None or not segment_type.get("name"):
-            raise ValueError(f"Node {node_id!r} has no semantic segment type")
-        geometry = node.get("geometry")
-        if not isinstance(geometry, Mapping):
-            raise ValueError(f"Node {node_id!r} has no exact geometry record")
-        geometry_type = geometry.get("geometry_type")
-        if geometry_type not in {"Polygon", "MultiPolygon"} or node.get("geometry_type") != geometry_type:
-            raise ValueError(f"Node {node_id!r} has an invalid geometry type")
-        spaces = geometry.get("coordinate_spaces")
-        if not isinstance(spaces, Mapping) or set(spaces) != {
-            "tile_pixel",
-            "source_pixel",
-            "projected",
-            "wgs84",
-        }:
-            raise ValueError(f"Node {node_id!r} has incomplete coordinate spaces")
-        tile_space = spaces["tile_pixel"]
-        if (
-            not isinstance(tile_space, Mapping)
-            or tile_space.get("available") is not True
-            or not isinstance(tile_space.get("geometry"), Mapping)
-            or tile_space.get("geometry_type") != geometry_type
-            or tile_space.get("representative_point_xy") is None
-        ):
-            raise ValueError(f"Node {node_id!r} has invalid tile-pixel geometry")
-        metrics = geometry.get("metrics")
-        if not isinstance(metrics, Mapping) or int(metrics.get("area_pixels", 0)) != area_pixels:
-            raise ValueError(f"Node {node_id!r} has inconsistent geometry metrics")
+        if compact:
+            _validate_compact_node(node, str(metadata.get("tile_id", "")))
+        else:
+            segmentation_metadata = node.get("refinement_metadata", node.get("stage2_metadata"))
+            if (
+                not isinstance(segmentation_metadata, Mapping)
+                or int(segmentation_metadata.get("instance_id", 0)) != instance_id
+            ):
+                raise ValueError(
+                    f"Node {node_id!r} does not preserve matching segmentation metadata"
+                )
+            area_pixels = int(node.get("area_pixels", 0))
+            if area_pixels <= 0 or int(segmentation_metadata.get("area_pixels", 0)) != area_pixels:
+                raise ValueError(f"Node {node_id!r} has inconsistent pixel area")
+            segment_type = node.get("segment_type")
+            if not isinstance(segment_type, Mapping) or segment_type.get("id") is None or not segment_type.get("name"):
+                raise ValueError(f"Node {node_id!r} has no semantic segment type")
+            geometry = node.get("geometry")
+            if not isinstance(geometry, Mapping):
+                raise ValueError(f"Node {node_id!r} has no exact geometry record")
+            geometry_type = geometry.get("geometry_type")
+            if geometry_type not in {"Polygon", "MultiPolygon"} or node.get("geometry_type") != geometry_type:
+                raise ValueError(f"Node {node_id!r} has an invalid geometry type")
+            spaces = geometry.get("coordinate_spaces")
+            if not isinstance(spaces, Mapping) or set(spaces) != {
+                "tile_pixel",
+                "source_pixel",
+                "projected",
+                "wgs84",
+            }:
+                raise ValueError(f"Node {node_id!r} has incomplete coordinate spaces")
+            tile_space = spaces["tile_pixel"]
+            if (
+                not isinstance(tile_space, Mapping)
+                or tile_space.get("available") is not True
+                or not isinstance(tile_space.get("geometry"), Mapping)
+                or tile_space.get("geometry_type") != geometry_type
+                or tile_space.get("representative_point_xy") is None
+            ):
+                raise ValueError(f"Node {node_id!r} has invalid tile-pixel geometry")
+            metrics = geometry.get("metrics")
+            if not isinstance(metrics, Mapping) or int(metrics.get("area_pixels", 0)) != area_pixels:
+                raise ValueError(f"Node {node_id!r} has inconsistent geometry metrics")
         node_ids.add(node_id)
         instance_ids.add(instance_id)
         node_id_by_instance[instance_id] = node_id
@@ -138,9 +197,9 @@ def validate_graph_document(document: Mapping[str, Any]) -> None:
         pair = tuple(sorted((source, target)))
         if pair in seen_pairs:
             raise ValueError(f"Stage 3 graph contains a duplicate edge: {pair!r}")
-        if edge.get("relation") != "adjacent":
+        if not compact and edge.get("relation") != "adjacent":
             raise ValueError(f"Stage 3 edge has an unsupported relation: {edge.get('relation')!r}")
-        if edge.get("adjacency_definition") != ADJACENCY_DEFINITION:
+        if not compact and edge.get("adjacency_definition") != ADJACENCY_DEFINITION:
             raise ValueError("Stage 3 edge has an unsupported adjacency definition")
         shared_count = int(edge.get("shared_boundary_side_count", 0))
         left_right = int(edge.get("left_right_contact_count", -1))
@@ -152,8 +211,9 @@ def validate_graph_document(document: Mapping[str, Any]) -> None:
         if float(edge.get("shared_boundary_length_pixels", 0)) != float(shared_count):
             raise ValueError(f"Stage 3 edge pixel boundary length disagrees: {edge_id!r}")
         projected_length = edge.get("shared_boundary_length_projected")
-        projected_unit = edge.get("shared_boundary_projected_unit")
-        projected_crs = edge.get("shared_boundary_projected_crs")
+        projected_metadata = metadata.get("projected_measurements", {}) if compact else {}
+        projected_unit = projected_metadata.get("unit") if compact else edge.get("shared_boundary_projected_unit")
+        projected_crs = projected_metadata.get("crs") if compact else edge.get("shared_boundary_projected_crs")
         if projected_length is None:
             if projected_unit is not None:
                 raise ValueError(f"Stage 3 edge has a projected unit without a length: {edge_id!r}")
@@ -166,11 +226,17 @@ def validate_graph_document(document: Mapping[str, Any]) -> None:
             raise ValueError(f"Stage 3 edge has incomplete projected length metadata: {edge_id!r}")
         source_node = node_by_id[source]
         target_node = node_by_id[target]
-        if (
+        if not compact and (
             edge.get("source_class_id") != source_node["segment_type"]["id"]
             or edge.get("target_class_id") != target_node["segment_type"]["id"]
         ):
             raise ValueError(f"Stage 3 edge endpoint classes disagree: {edge_id!r}")
+        if compact:
+            if set(edge) != COMPACT_EDGE_FIELDS:
+                raise ValueError(f"Stage 3 edge has invalid compact fields: {edge_id!r}")
+            _validate_xy(edge["contact_centroid_tile_pixel_xy"], "edge contact centroid")
+            if edge["same_semantic_class"] != (source_node["segment_type"]["id"] == target_node["segment_type"]["id"]):
+                raise ValueError(f"Stage 3 edge endpoint classes disagree: {edge_id!r}")
         seen_pairs.add(pair)
         edge_ids.add(edge_id)
 
@@ -188,7 +254,7 @@ def validate_analysis_graph_document(
     checked against its ``analysis_view.included`` flags.
     """
 
-    if document.get("schema_version") != ANALYSIS_SCHEMA_VERSION:
+    if document.get("schema_version") not in SUPPORTED_ANALYSIS_SCHEMA_VERSIONS:
         raise ValueError(
             "Unsupported Stage 3 analysis graph schema: "
             f"{document.get('schema_version')!r}"
@@ -240,7 +306,7 @@ def validate_analysis_graph_document(
         edge_ids.add(edge_id)
 
     source_graph = metadata.get("source_graph")
-    if not isinstance(source_graph, Mapping) or source_graph.get("schema_version") != SCHEMA_VERSION:
+    if not isinstance(source_graph, Mapping) or source_graph.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError("Stage 3 analysis graph has invalid authoritative source metadata")
     if source_graph.get("artifact") != "graph.json" or not source_graph.get("graph_id"):
         raise ValueError("Stage 3 analysis graph has no authoritative graph identity")
@@ -251,6 +317,12 @@ def validate_analysis_graph_document(
     if authoritative_document is None:
         return
     validate_graph_document(authoritative_document)
+    if source_graph["schema_version"] != authoritative_document["schema_version"]:
+        raise ValueError("Stage 3 analysis source schema disagrees with graph.json")
+    expected_schema = (ANALYSIS_SCHEMA_VERSION if authoritative_document["schema_version"] == SCHEMA_VERSION
+                       else "satellitegraph.stage3.analysis-view.v1")
+    if document["schema_version"] != expected_schema:
+        raise ValueError("Stage 3 analysis schema disagrees with graph.json")
     authoritative_metadata = authoritative_document["graph"]
     expected_nodes = [
         node
@@ -276,6 +348,8 @@ def validate_analysis_graph_document(
         raise ValueError("Stage 3 analysis authoritative edge count disagrees")
     if metadata.get("selection") != authoritative_metadata.get("analysis_view"):
         raise ValueError("Stage 3 analysis selection metadata disagrees with graph.json")
+    if metadata.get("projected_measurements") != authoritative_metadata.get("projected_measurements"):
+        raise ValueError("Stage 3 analysis projected measurements disagree with graph.json")
     if (
         int(source_graph.get("node_count", -1)) != len(authoritative_document["nodes"])
         or int(source_graph.get("edge_count", -1)) != len(authoritative_document["edges"])

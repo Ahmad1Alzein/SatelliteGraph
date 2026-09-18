@@ -828,12 +828,11 @@ Stage 3 must consume the completed `13_refinement` result explicitly. It must
 not silently fall back to `12_final` when refinement is configured, because
 that would display or export a graph that disagrees with reviewed pixels.
 Every refined segment becomes one node and adjacency is recalculated from the
-refined instance map. Node metadata distinguishes the three lineage layers:
-
-- `refinement_metadata` is the exact refined record that produced the node;
-- `stage2_metadata` is its primary immutable Stage 2 ancestor; and
-- `source_stage2_metadata` contains every immutable Stage 2 ancestor, which is
-  necessary after reviewed merge or absorption.
+refined instance map. Stage 3 v3 stores compact graph features and exact
+polygons, with a graph-level reference to this refinement result. It does not
+copy `refinement_metadata`, `stage2_metadata`, or `source_stage2_metadata` onto
+every node. Full lineage and model evidence stay in their original Stage 2/2R
+artifacts; node segment/instance IDs identify the corresponding refined record.
 
 ## 10. Implemented scope, research basis, and roadmap
 
