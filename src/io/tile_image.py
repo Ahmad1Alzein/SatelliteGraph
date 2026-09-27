@@ -4,16 +4,50 @@ from pathlib import Path
 
 
 def tile_image(
-        image,
-        image_name,
-        tile_size,
-        stride,
-        tiles_dir,
-        metadata_dir
+        image=None,
+        image_name=None,
+        tile_size=512,
+        stride=None,
+        tiles_dir=None,
+        metadata_dir=None,
+        *, source_path=None, data_directory=None, target_resolution=None,
+        target_crs=None, overlap=None, resampling="average", progress=False,
+        resolution_mode="preserve", edge_mode="shift",
 ):
+    """Optionally resize an entire GeoTIFF, save it, then tile the saved raster.
+
+    Use source_path/data_directory for georeferenced processing. Omitting
+    target_resolution keeps the original pixels. Legacy array calls remain
+    supported, but cannot request metre resolution without georeferencing.
+    """
+    if source_path is not None or isinstance(image,(str,Path)):
+        from src.io.raster_tiling import prepare_raster_tiles
+        if source_path is not None and image is not None:
+            raise ValueError("Provide either image or source_path")
+        if data_directory is None:
+            raise ValueError("GeoTIFF tiling requires data_directory")
+        if tiles_dir is not None or metadata_dir is not None:
+            raise ValueError("Use data_directory for GeoTIFF outputs")
+        if overlap is None:
+            overlap = tile_size-stride if stride is not None else 50
+        elif stride is not None and stride!=tile_size-overlap:
+            raise ValueError("stride and overlap disagree")
+        return prepare_raster_tiles(source_path if source_path is not None else image,data_directory,
+            image_name=image_name,target_resolution=target_resolution,target_crs=target_crs,
+            tile_size=tile_size,overlap=overlap,resampling=resampling,progress=progress,
+            resolution_mode=resolution_mode,edge_mode=edge_mode)
+    if target_resolution is not None or target_crs is not None:
+        raise ValueError("Metre resolution conversion requires a georeferenced source_path")
+    if image is None or image_name is None or tiles_dir is None or metadata_dir is None:
+        raise ValueError("Array tiling requires image, image_name, tiles_dir and metadata_dir")
+    if stride is None:
+        stride = tile_size-(50 if overlap is None else overlap)
+    if stride<=0 or tile_size<=0:
+        raise ValueError("tile_size and stride must be positive")
 
     tiles_path = Path(tiles_dir) / image_name
     tiles_path.mkdir(parents=True, exist_ok=True)
+    Path(metadata_dir).mkdir(parents=True,exist_ok=True)
 
     H, W = image.shape[:2]
 

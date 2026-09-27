@@ -1,4 +1,25 @@
 # SatelliteGraph project configuration for every processing stage.
+stage5:
+  # null uses the first year's projected metre CRS. Set explicitly if geographic.
+  target_crs: null
+  output_directory: artifacts/stage5
+  changes:
+    minimum_area_m2: 4.0
+    minimum_relative_change: 0.05
+    boundary_tolerance_m: 1.0
+    minimum_observed_fraction: 0.95
+    minimum_confidence: 0.60
+    minimum_known_fraction: 0.95
+  matching:
+    search_radius_m: 5.0
+    minimum_iou: 0.20
+    minimum_score: 0.60
+    ambiguity_margin: 0.05
+    minimum_visible_fraction: 0.90
+    lineage_child_coverage: 0.80
+    lineage_parent_coverage: 0.80
+    lineage_minimum_share: 0.10
+    max_assignment_cells: 4000000
 # Relative paths are resolved from the repository root.
 project:
   paths:
@@ -9,6 +30,11 @@ project:
   tiling:
     tile_size: 512
     overlap: 50
+    target_resolution_m: null  # null preserves original pixels; e.g. 1.5 resamples to 1.5 m
+    target_crs: null           # used only in projected mode; null selects local metric CRS
+    resampling: average
+    resolution_mode: preserve # retain complete source footprint; geographic metre size is approximate
+    edge_mode: shift          # cover final edges with full tiles; final overlap may be larger
 
 stage2:
   instance_model:

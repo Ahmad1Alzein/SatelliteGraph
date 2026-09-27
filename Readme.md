@@ -9,6 +9,11 @@ and tile-local adjacency graphs. The current workflow is:
 4. Stage 3 converts the refined segments into a graph for that tile.
 5. Stage 4 combines any selected set of tile graphs in source coordinates and
    reconciles duplicate objects in their overlaps.
+6. Stage 5 treats each complete Stage 4 graph as one year, converts it to shared
+   world coordinates, and adds temporal region-correspondence and split/merge
+   edges between years. It also records class-specific appearance/disappearance,
+   construction/removal, expansion/contraction, and classification-uncertainty
+   events. See [Stage 5 spatiotemporal graphs](docs/stage5-spatiotemporal-graph.md).
 
 Stage 2 runs two models in one pipeline:
 
@@ -86,6 +91,84 @@ data/metadata/<source>.csv
 
 Run Stage 2 with the canonical tile ID `<source>__tile_XXXXX`; `run_stage2` and
 the CLI take a `tile_id`, not an image path.
+
+## Tile an image and optionally change its ground resolution
+
+Keep the original pixel grid:
+
+```powershell
+python -m src stage1 tile --source data/raw/scene.tif --keep-resolution
+```
+
+Or change the pixel size to 1.5 metres before tiling:
+
+```powershell
+python -m src stage1 tile --source "D:/satellite graph/data/raw/image_2023.tif" `
+  --data-directory "D:/satellite graph/data" --resolution 1.5 `
+  --resolution-mode preserve --tile-size 512 --overlap 50
+```
+
+`--resolution` is the requested **metres per pixel**, not degrees. The default
+`--resolution-mode preserve` resizes the full image in its original CRS and
+preserves its footprint. It does not crop, filter tiles, or create reprojection
+margins. The affine transform is scaled to the new dimensions. For geographic
+sources, the requested metre size is approximate at the image centre and varies
+with location; integer output dimensions also require slight rounding. The
+manifest records the actual pixel-axis lengths in metres at the centre.
+
+For an exact projected pixel size, explicitly use `--resolution-mode projected`
+and optionally `--target-crs EPSG:32636`. This reprojects to a metre-based grid
+and can introduce masked margins around the transformed footprint. It is a
+different operation from resizing the original rectangular image.
+
+The source must have valid georeferencing. Average resampling is the default for
+downsampling continuous imagery; `--resampling` also accepts bilinear, cubic,
+or nearest. This path supports uint8/uint16 RGB bands without intensity stretching.
+
+The original GeoTIFF is preserved. Resampled output is named
+`raw/image_2023_1p5m.tif`, tiles go to `tiles/image_2023_1p5m/`, and the CSV and
+run manifest go to `metadata/`. Use `--name` for a different output identifier;
+existing outputs are not overwritten. Streaming windows keep memory bounded
+for large rasters.
+
+The entire converted GeoTIFF is completed and closed **before** tiling starts.
+By default, tiles are exactly 512×512 with stride 462 (50-pixel overlap). The
+final row/column shift inward to meet the image boundary, so their overlap can
+be larger than 50 pixels. This covers every resized image pixel without padding
+or removing boundary tiles. The source must be at least one tile wide and high.
+Exact 50-pixel overlap everywhere, full-size edge tiles, and no padding cannot
+all be guaranteed for arbitrary image dimensions.
+
+`--edge-mode pad` explicitly selects a regular grid with transparent padding.
+PNG alpha preserves any pre-existing source nodata; missing source observations
+are never invented. The CSV records exact offsets, `valid_width`, `valid_height`,
+`alpha_band`, and `valid_pixel_count`. The manifest records the complete grid
+offsets. Downstream placement uses these offsets, including the shifted final
+tiles, and the converted raster's affine transform.
+
+Defaults are in `project.tiling` in `config.yaml`: `target_resolution_m: null`
+preserves the source resolution; set it to a positive value to resample.
+`--keep-resolution` explicitly overrides that setting. Resolution changes alter
+pixel detail, not the geographic footprint in preserve mode.
+
+The CLI and Python API use the same tiling method for both steps:
+
+```python
+from src.io.tile_image import tile_image
+
+result = tile_image(
+    source_path="data/raw/scene.tif",
+    data_directory="data",
+    target_resolution=1.5,  # None skips conversion
+    tile_size=512,
+    overlap=50,
+)
+```
+
+Legacy in-memory array calls retain their pixel-only behavior. Metre conversion
+requires `source_path` because an array alone does not contain georeferencing.
+The resampling and affine scaling follow the
+[Rasterio resampling guidance](https://rasterio.readthedocs.io/en/stable/topics/resampling.html).
 
 ## Run Stage 2 for one tile
 

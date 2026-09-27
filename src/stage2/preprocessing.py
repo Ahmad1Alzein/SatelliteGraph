@@ -15,7 +15,10 @@ def prepare_image(image: np.ndarray, metadata: dict[str, Any], config: dict[str,
     finite = np.isfinite(selected).all(axis=2)
     valid = finite.copy()
     nodata = metadata.get("nodata")
-    if nodata is not None:
+    alpha_index = metadata.get("alpha_band_index")
+    if alpha_index is not None:
+        valid &= image[...,int(alpha_index)]>0
+    elif nodata is not None:
         valid &= ~np.any(selected == nodata, axis=2)
     if not valid.any():
         raise ValueError("Tile contains no valid pixels after nodata/finite checks")

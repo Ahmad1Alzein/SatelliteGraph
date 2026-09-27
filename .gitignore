@@ -60,6 +60,7 @@ coverage.xml
 /data/raw/
 /data/tiles/
 /data/metadata/
+/tiles17_23/
 /outputs/
 /artifacts/
 /checkpoints/

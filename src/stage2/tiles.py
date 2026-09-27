@@ -80,11 +80,20 @@ def validate_tile(
         "compatibility_notes": source_notes,
     }
     normalized.update(source_raster)
+    if row.get("alpha_band"):
+        alpha_band = _int(row["alpha_band"])
+        valid_w,valid_h = _int(row.get("valid_width")),_int(row.get("valid_height"))
+        if alpha_band!=4 or image.shape[2]!=4 or valid_w is None or valid_h is None or not (0<valid_w<=w and 0<valid_h<=h):
+            errors.append("Invalid Stage 1 alpha/padding metadata")
+        else:
+            normalized.update(alpha_band_index=3,valid_data_available=True,
+                              original_unpadded_width=valid_w,original_unpadded_height=valid_h,
+                              padding={"top":0,"left":0,"right":w-valid_w,"bottom":h-valid_h})
     normalized["tile_affine_transform"] = _offset_affine(normalized["source_affine_transform"], x0, y0)
     normalized.update(_tile_spatial_bounds(normalized["tile_affine_transform"], w, h, normalized.get("crs")))
     source_width, source_height = normalized.get("source_raster_width"), normalized.get("source_raster_height")
     if x0 is not None and y0 is not None and source_width is not None and source_height is not None:
-        if x0 + w > source_width or y0 + h > source_height:
+        if x0 + normalized["original_unpadded_width"] > source_width or y0 + normalized["original_unpadded_height"] > source_height:
             errors.append(
                 f"tile extent ({x0}, {y0}, {x0 + w}, {y0 + h}) exceeds source raster "
                 f"dimensions {source_width}x{source_height}"

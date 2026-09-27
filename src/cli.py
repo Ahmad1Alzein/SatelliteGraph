@@ -14,6 +14,25 @@ from src.stage2.pipeline import run_stage2
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="python -m src")
     commands = root.add_subparsers(dest="stage", required=True)
+    stage1 = commands.add_parser("stage1",help="Optionally resample a GeoTIFF, then generate fixed-size tiles")
+    stage1_phases = stage1.add_subparsers(dest="phase",required=True)
+    tile = stage1_phases.add_parser("tile")
+    tile.add_argument("--source",required=True)
+    tile.add_argument("--data-directory",default=None)
+    resolution = tile.add_mutually_exclusive_group()
+    resolution.add_argument("--resolution",type=float,default=None,help="Target pixel size in metres")
+    resolution.add_argument("--keep-resolution",action="store_true",help="Override config and retain the source grid")
+    tile.add_argument("--target-crs",default=None,help="Projected metre CRS; defaults to source metre CRS or local UTM")
+    tile.add_argument("--tile-size",type=int,default=None)
+    tile.add_argument("--overlap",type=int,default=None)
+    tile.add_argument("--name",default=None)
+    tile.add_argument("--resampling",choices=["average","bilinear","cubic","nearest"],default=None)
+    tile.add_argument("--resolution-mode",choices=["preserve","projected"],default=None,
+                      help="Preserve the full footprint (default), or explicitly reproject")
+    tile.add_argument("--edge-mode",choices=["shift","pad"],default=None,
+                      help="Shift final tiles inward (default), or add transparent padding")
+    tile.add_argument("--config",default=str(DEFAULT_CONFIG))
+    tile.add_argument("--project-root",default=".")
     stage2 = commands.add_parser(
         "stage2",
         help="SAM 2 + OpenEarthMap full semantic instance segmentation",
@@ -182,6 +201,13 @@ def parser() -> argparse.ArgumentParser:
         help="Single project configuration (default: config.yaml)",
     )
     stage4_combine.add_argument("--project-root", default=".")
+    stage5 = commands.add_parser("stage5", help="Connect yearly Stage 4 combined graphs in world coordinates")
+    stage5_phases = stage5.add_subparsers(dest="phase", required=True)
+    stage5_build = stage5_phases.add_parser("build")
+    stage5_build.add_argument("--series", required=True, help="JSON listing one completed Stage 4 graph per year")
+    stage5_build.add_argument("--name", default=None)
+    stage5_build.add_argument("--config", default=str(DEFAULT_CONFIG))
+    stage5_build.add_argument("--project-root", default=".")
     return root
 
 
@@ -189,7 +215,22 @@ def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
     project_root = Path(args.project_root).resolve()
     try:
-        if args.stage == "stage2":
+        if args.stage == "stage1":
+            from src.io.tile_image import tile_image
+            cfg = load_config(args.config)["project"]
+            tiling = cfg["tiling"]
+            data = Path(args.data_directory or cfg["paths"]["data_directory"])
+            source = Path(args.source)
+            result = tile_image(source_path=source if source.is_absolute() else project_root/source,
+                data_directory=data if data.is_absolute() else project_root/data,
+                target_resolution=None if args.keep_resolution else (args.resolution if args.resolution is not None else tiling.get("target_resolution_m")),
+                target_crs=None if args.keep_resolution else (args.target_crs or tiling.get("target_crs")),
+                tile_size=args.tile_size if args.tile_size is not None else tiling["tile_size"],
+                overlap=args.overlap if args.overlap is not None else tiling["overlap"],image_name=args.name,
+                resampling=args.resampling or tiling.get("resampling","average"),progress=True,
+                resolution_mode=args.resolution_mode or tiling.get("resolution_mode","preserve"),
+                edge_mode=args.edge_mode or tiling.get("edge_mode","shift"))
+        elif args.stage == "stage2":
             if args.phase == "run":
                 result = run_stage2(
                     args.tile_id,
@@ -288,6 +329,10 @@ def main(argv: list[str] | None = None) -> None:
                 config=args.config,
                 output_name=args.name,
             ).summary()
+        elif args.stage == "stage5":
+            from src.stage5 import run_stage5
+            result = run_stage5(args.series, project_root=project_root,
+                                config=args.config, output_name=args.name)
         else:  # pragma: no cover - argparse restricts the available stages.
             raise ValueError(f"Unsupported stage: {args.stage}")
     except Exception as exc:

@@ -174,3 +174,8 @@ ordinary overlaps because the compared pixels are already the same source
 coordinates; semantic confidence is used only to break ownership ties. Road
 continuity inferred across a real missing-data gap is also out of scope—Stage 4
 combines observed geometry and never hallucinates a connection.
+
+For cross-year comparison, pass one complete Stage 4 result per year to
+[Stage 5](stage5-spatiotemporal-graph.md). Stage 5 converts these source-pixel
+geometries to a common world CRS and adds temporal edges; it does not reuse
+Stage 4's same-date duplicate-merging rule as a temporal identity rule.

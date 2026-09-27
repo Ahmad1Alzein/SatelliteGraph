@@ -1,0 +1,13 @@
+{
+  "name": "IKONOS_yearly_comparison",
+  "snapshots": [
+    {
+      "year": 2005,
+      "graph_directory": "artifacts/stage4/IKONOS_tiles_00000_00003/01_combined_graph"
+    },
+    {
+      "year": 2015,
+      "graph_directory": "artifacts/stage4/SECOND_YEAR_FOUR_TILE_GRAPH/01_combined_graph"
+    }
+  ]
+}
