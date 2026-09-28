@@ -383,3 +383,59 @@ The normal combined overlay uses `graph_analysis.json`: unresolved unknowns
 below 41 pixels and edges with fewer than two shared sides are omitted. The
 full graph remains in `graph.json` and `combined_graph_overlay_audit.png`.
 This display selection is separate from real semantic absorption in Stage 2R.
+
+## Run all stages for complete yearly tile folders
+
+The `folder run` command takes every PNG directly inside one folder. It executes
+real SAM 2 and OpenEarthMap segmentation, automatic full refinement (including
+unknown and contextual noise cleanup), refinement validation, one spatial graph
+per tile, and one combined graph for the whole year. It saves the combined graph
+over the complete selected image as `full_image_with_graph.png` inside the output
+folder. That image shows every graph node and edge; the less crowded analysis
+view is `full_image_with_analysis_graph.png`. These are rendered previews of the
+whole tile mosaic, not native-resolution rasters. The full graph, analysis graph,
+overlap ledger, GeoJSON, and other audit files remain under
+`stage4/year_<year>/01_combined_graph/`.
+
+Every folder needs `metadata.csv` with each PNG's exact `tile_name`, `x0`, and
+`y0`, plus one georeferenced GeoTIFF (or explicit `--metadata` and
+`--source-raster` arguments). Without those inputs the command stops: PNG
+filenames do not establish global location. The valid PNG pixels must match
+the RGB values in the declared GeoTIFF windows; padded edge pixels are excluded
+using the CSV's `valid_width` and `valid_height`. The files for the supplied 2017
+and 2023 folders are already present. Their `georeference_audit.json` records
+how the coordinates were matched to the source rasters. The two folders each
+contain **7** PNG tiles, so these commands process all **14** available tiles.
+
+From the repository root, with the existing sibling virtual environment in
+PowerShell:
+
+```powershell
+$python = '..\.venv\Scripts\python.exe'
+& $python -m src folder run --folder 'tiles17_23/2017' --year 2017 --output 'artifacts/tiles17_23_runs/2017'
+& $python -m src folder run --folder 'tiles17_23/2023' --year 2023 --output 'artifacts/tiles17_23_runs/2023'
+& $python -m src folder compare --first 'artifacts/tiles17_23_runs/2017' --second 'artifacts/tiles17_23_runs/2023' --registration-json 'tiles17_23/registration_2017_2023.json' --boundary-tolerance 6 --output 'artifacts/tiles17_23_runs/spatiotemporal'
+```
+
+The third command reads the two completed annual `run.json` files and their
+checksummed Stage 4 graphs. It saves `01_temporal_graph/graph.json`,
+`temporal_graph.png`, `changes.geojson`, reports, and an indexed graph array in
+the comparison output folder. Its `run.json` reports common coverage and the
+spatial, temporal, and change-edge counts. The supplied registration file uses
+cross-year image controls; its held-out patch check had 2.3 m median and 5.3 m 95th
+percentile feature disagreement. The 6 m change-boundary tolerance is a
+conservative screening threshold, not proof of real-world change accuracy.
+Inspect the overlays and candidate change geometries before interpreting
+construction, demolition, or disappearance as physical facts.
+
+The yearly command can resume a run with identical inputs and configuration:
+completed tiles are validated and reused, while incomplete tiles run all their
+stages. Changing source files, metadata, or the configuration requires a new
+output folder. A failed comparison can be retried with the same inputs and
+output folder; completed comparisons are kept immutable. The comparison checks
+that the annual graphs contain the recorded tiles and have common observed
+coverage after registration. `folder compare` accepts `--register-images`
+instead of `--registration-json` for other datasets when automatic image matching
+has enough reliable correspondences; that option also checks that the source
+GeoTIFFs have not changed since the annual runs. With `--project-root`, relative
+config paths are resolved from that project root.

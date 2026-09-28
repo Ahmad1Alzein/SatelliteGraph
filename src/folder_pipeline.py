@@ -1,0 +1,329 @@
+"""Run all processing stages for one georeferenced tile folder, then compare years."""
+from __future__ import annotations
+
+import copy
+import csv
+import hashlib
+import json
+from pathlib import Path
+import shutil
+
+import cv2
+import numpy as np
+import rasterio
+from rasterio.windows import Window
+
+from src.config import DEFAULT_CONFIG, load_config, validate_config
+from src.stage2.artifacts import atomic_json, now
+
+
+def _digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def inspect_folder(folder, *, raster=None, metadata=None):
+    """Require real tile offsets and CRS; filenames alone cannot establish location."""
+    folder = Path(folder).expanduser().resolve()
+    if not folder.is_dir():
+        raise FileNotFoundError(f"Tile folder not found: {folder}")
+    tiles = sorted(folder.glob("*.png"))
+    if not tiles:
+        raise ValueError(f"No PNG tiles found directly in {folder}")
+    if raster is None:
+        options = sorted([*folder.glob("*.tif"),*folder.glob("*.tiff")])
+        preferred = [item for item in options if item.stem=="source"]
+        raster = preferred[0] if len(preferred)==1 else options[0] if len(options)==1 else None
+    raster = Path(raster).expanduser().resolve() if raster is not None else None
+    if raster is None or not raster.is_file():
+        raise ValueError("A georeferenced source raster is required: put one .tif/.tiff in the folder or pass --source-raster")
+    metadata = Path(metadata).expanduser().resolve() if metadata is not None else folder/"metadata.csv"
+    if not metadata.is_file():
+        raise ValueError("metadata.csv with exact x0/y0 offsets is required (or pass --metadata)")
+    with metadata.open(newline="",encoding="utf-8-sig") as stream:
+        reader = csv.DictReader(stream)
+        if not {"tile_name","x0","y0"}.issubset(reader.fieldnames or []):
+            raise ValueError("Tile metadata needs tile_name, x0, and y0 columns")
+        rows = list(reader)
+    names = [p.name for p in tiles]
+    if len(set(row["tile_name"] for row in rows))!=len(rows) or set(row["tile_name"] for row in rows)!=set(names):
+        raise ValueError("Tile metadata names must match every PNG in the folder exactly once")
+    by_name = {row["tile_name"]:row for row in rows}
+    normalized = []
+    with rasterio.open(raster) as source:
+        if source.crs is None or source.transform is None or source.count<3:
+            raise ValueError("Source raster needs a CRS, affine transform, and three RGB bands")
+        for tile in tiles:
+            image = cv2.imread(str(tile),cv2.IMREAD_UNCHANGED)
+            if image is None or image.ndim!=3 or image.shape[2] not in (3,4):
+                raise ValueError(f"Unreadable RGB/RGBA tile: {tile}")
+            row = by_name[tile.name]
+            try:
+                x,y = int(row["x0"]),int(row["y0"])
+            except (TypeError,ValueError) as exc:
+                raise ValueError(f"Noninteger x0/y0 for {tile.name}") from exc
+            h,w = image.shape[:2]
+            try:
+                valid_w = int(row["valid_width"]) if row.get("valid_width") else w
+                valid_h = int(row["valid_height"]) if row.get("valid_height") else h
+                declared_w = int(row["width"]) if row.get("width") else w
+                declared_h = int(row["height"]) if row.get("height") else h
+            except (TypeError,ValueError) as exc:
+                raise ValueError(f"Invalid tile dimensions for {tile.name}") from exc
+            if (declared_w,declared_h)!=(w,h) or not (0<valid_w<=w and 0<valid_h<=h):
+                raise ValueError(f"Tile {tile.name} dimensions disagree with metadata")
+            if x<0 or y<0 or x+valid_w>source.width or y+valid_h>source.height:
+                raise ValueError(f"Tile {tile.name} valid pixels lie outside its source raster")
+            if image.shape[2]==4:
+                if row.get("alpha_band") and row["alpha_band"]!="4":
+                    raise ValueError(f"Tile {tile.name} alpha band disagrees with metadata")
+                mask = image[:,:,3]>0
+                if mask[valid_h:,:].any() or mask[:,valid_w:].any():
+                    raise ValueError(f"Tile {tile.name} has nontransparent pixels outside its valid extent")
+                valid = int(mask.sum())
+                alpha = 4
+            else:
+                if valid_w!=w or valid_h!=h or row.get("alpha_band"):
+                    raise ValueError(f"Tile {tile.name} needs an alpha band for padded pixels")
+                mask = np.ones((h,w),dtype=bool)
+                valid = w*h
+                alpha = ""
+            if row.get("valid_pixel_count") and int(row["valid_pixel_count"])!=valid:
+                raise ValueError(f"Tile {tile.name} valid-pixel count disagrees with metadata")
+            source_rgb = source.read([1,2,3],window=Window(x,y,valid_w,valid_h)).transpose(1,2,0)
+            tile_rgb = image[:valid_h,:valid_w,2::-1]
+            if not np.array_equal(tile_rgb[mask[:valid_h,:valid_w]],source_rgb[mask[:valid_h,:valid_w]]):
+                raise ValueError(f"Tile {tile.name} pixels do not match its source raster window at x0/y0")
+            normalized.append(dict(tile_id=tile.stem.removeprefix("tile_"),tile_name=tile.name,
+                x0=x,y0=y,x1=x+w,y1=y+h,width=w,height=h,
+                valid_width=valid_w,valid_height=valid_h,alpha_band=alpha,valid_pixel_count=valid))
+    return {"folder":folder,"tiles":tiles,"raster":raster,"metadata":metadata,"rows":normalized}
+
+
+def _annual_config(config, output, source, image_name):
+    cfg = load_config(config) if not isinstance(config,dict) else copy.deepcopy(config)
+    paths=cfg["project"]["paths"]
+    paths.update(raw_directory=str(source.parent),tiles_directory=str(output/"inputs/tiles"),
+                 metadata_directory=str(output/"inputs/metadata"),data_directory=str(output/"inputs"))
+    cfg["stage2"]["output"]["root_directory"]=str(output/"stage2")
+    cfg["stage3"]["output"]["root_directory"]=str(output/"stage3")
+    cfg["stage4"]["input"]["root_directory"]=str(output/"stage3")
+    cfg["stage4"]["output"]["root_directory"]=str(output/"stage4")
+    cfg["refinement"]["mode"]="automatic"
+    validate_config(cfg)
+    return cfg
+
+
+def run_folder(folder, year, output, *, source_raster=None, metadata=None,
+               config=DEFAULT_CONFIG, project_root=".", show_progress=True):
+    """Complete Stage 2, automatic Stage 2R, Stage 3, and Stage 4 for every PNG."""
+    if isinstance(year,bool) or not isinstance(year,int) or not 1<=year<=9999:
+        raise ValueError("year must be an integer in 1..9999")
+    root=Path(project_root).resolve()
+    path=lambda value: Path(value) if Path(value).is_absolute() else root/value
+    inspected=inspect_folder(path(folder),raster=path(source_raster) if source_raster else None,
+                             metadata=path(metadata) if metadata else None)
+    output=path(output).resolve()
+    if (output==inspected["folder"] or output in inspected["folder"].parents
+            or inspected["folder"] in output.parents):
+        raise ValueError("Output must be separate from the input tile folder")
+    image_name=inspected["raster"].stem
+    selected=_annual_config(path(config) if not isinstance(config,dict) else config,
+                            output,inspected["raster"],image_name)
+    signature={str(p):_digest(p) for p in [inspected["raster"],inspected["metadata"],*inspected["tiles"]]}
+    cfg_hash=hashlib.sha256(json.dumps(selected,sort_keys=True,default=str).encode()).hexdigest()
+    ledger=output/"run.json"
+    if ledger.exists():
+        state=json.loads(ledger.read_text(encoding="utf-8"))
+        if state.get("year")!=year or state.get("input_sha256")!=signature or state.get("config_sha256")!=cfg_hash:
+            raise ValueError("Existing run has a different year, input content, or configuration; choose another output folder")
+    elif output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Output folder already has data but no run.json: {output}")
+    else:
+        output.mkdir(parents=True,exist_ok=True)
+        state={"status":"running","year":year,"source_folder":str(inspected["folder"]),
+               "source_raster":str(inspected["raster"]),"source_metadata":str(inspected["metadata"]),
+               "tile_count":len(inspected["tiles"]),"tile_ids":[],"input_sha256":signature,
+               "config_sha256":cfg_hash,"tiles":{},"started_at":now()}
+        atomic_json(ledger,state)
+    try:
+        staged=output/"inputs/tiles"/image_name
+        staged.mkdir(parents=True,exist_ok=True)
+        csv_path=output/"inputs/metadata"/f"{image_name}.csv"
+        csv_path.parent.mkdir(parents=True,exist_ok=True)
+        with csv_path.open("w",newline="",encoding="utf-8") as stream:
+            writer=csv.DictWriter(stream,fieldnames=list(inspected["rows"][0]))
+            writer.writeheader();writer.writerows(inspected["rows"])
+        for tile in inspected["tiles"]:
+            target=staged/tile.name
+            if not target.exists() or _digest(target)!=signature[str(tile)]:
+                shutil.copy2(tile,target)
+        ids=[f"{image_name}__{tile.stem}" for tile in inspected["tiles"]]
+        state["tile_ids"]=ids
+        atomic_json(ledger,state)
+    except Exception as exc:
+        state.update(status="failed",error=f"{type(exc).__name__}: {exc}",updated_at=now())
+        atomic_json(ledger,state)
+        raise
+    from src.stage2 import run_stage2
+    from src.stage2.backend import create_backend
+    from src.stage2.semantic import create_semantic_backend
+    from src.config import instance_config, semantic_config
+    from src.refinement import apply_refinement, validate_refinement
+    from src.stage3 import run_stage3, load_stage3_result
+    from src.stage4 import combine_tile_graphs, load_stage4_result
+    sam=semantic=None
+    try:
+        for index,tile_id in enumerate(ids,1):
+            entry=state["tiles"].get(tile_id,{})
+            if entry.get("status")=="complete":
+                load_stage3_result(output/"stage3"/tile_id/"01_graph")
+                validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
+                continue
+            state["current_step"]=f"{index}/{len(ids)} {tile_id}: segmentation"
+            atomic_json(ledger,state)
+            print(state["current_step"],flush=True)
+            if sam is None:
+                sam=create_backend(instance_config(selected),root);sam.load()
+                semantic=create_semantic_backend(semantic_config(selected),root);semantic.load()
+            segmented=run_stage2(tile_id,project_root=root,config=selected,
+                                 sam_backend=sam,semantic_backend=semantic,show_progress=show_progress)
+            entry["segmentation"]={"status":"complete","segment_count":len(segmented.segments)}
+            state["current_step"]=f"{tile_id}: automatic refinement and noise cleanup"
+            atomic_json(ledger,state)
+            refined=apply_refinement(tile_id,project_root=root,config=selected,
+                                     workflow_mode="automatic",show_progress=show_progress)
+            entry["refinement"]={"status":"complete","output_directory":str(refined.output_directory)}
+            validated=validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
+            entry["refinement_validation"]={"status":validated["status"]}
+            state["current_step"]=f"{tile_id}: tile graph"
+            atomic_json(ledger,state)
+            graph=run_stage3(tile_id,project_root=root,config=selected,show_progress=show_progress)
+            entry["stage3"]={"status":"complete","node_count":len(graph.nodes),"edge_count":len(graph.edges),
+                             "output_directory":str(graph.output_directory)}
+            entry["status"]="complete"
+            state["tiles"][tile_id]=entry
+            atomic_json(ledger,state)
+        if state.get("status")=="complete":
+            combined=load_stage4_result(state["combined_graph_directory"])
+        else:
+            state["current_step"]="Combine all tile graphs"
+            atomic_json(ledger,state)
+            combined=combine_tile_graphs(ids,project_root=root,config=selected,output_name=f"year_{year}")
+        overlay=output/"full_image_with_graph.png"
+        analysis_overlay=output/"full_image_with_analysis_graph.png"
+        shutil.copy2(combined.artifacts["graph_overlay_audit"],overlay)
+        shutil.copy2(combined.artifacts["graph_overlay"],analysis_overlay)
+        for key in ("error","current_step","updated_at"):
+            state.pop(key,None)
+        state.update(status="complete",completed_at=now(),combined_graph_directory=str(combined.output_directory),
+                     full_image_with_graph=str(overlay),full_image_with_analysis_graph=str(analysis_overlay),
+                     combined_node_count=len(combined.nodes),
+                     combined_edge_count=len(combined.edges))
+        atomic_json(ledger,state)
+        return {key:state[key] for key in ("status","year","tile_count","combined_graph_directory",
+                                           "full_image_with_graph","full_image_with_analysis_graph",
+                                           "combined_node_count","combined_edge_count")}
+    except Exception as exc:
+        state.update(status="failed",error=f"{type(exc).__name__}: {exc}",updated_at=now())
+        atomic_json(ledger,state)
+        raise
+
+
+def compare_folders(first, second, output, *, registration_json=None,
+                    register_images=False, boundary_tolerance=None,
+                    config=DEFAULT_CONFIG, project_root="."):
+    """Read two completed annual runs and build the final Stage 5 graph."""
+    if registration_json and register_images:
+        raise ValueError("Choose either registration control points or automatic image registration")
+    root=Path(project_root).resolve()
+    path=lambda value: (Path(value) if Path(value).is_absolute() else root/value).resolve()
+    sources=[]
+    run_inputs=[]
+    from src.stage4 import load_stage4_result
+    for folder in (first,second):
+        folder=path(folder)
+        record=folder/"run.json"
+        if not record.is_file():
+            raise ValueError(f"Only a complete folder run can be compared: {folder}")
+        annual=json.loads(record.read_text(encoding="utf-8"))
+        tile_ids=annual.get("tile_ids")
+        tiles=annual.get("tiles")
+        if (annual.get("status")!="complete" or not isinstance(tile_ids,list) or not tile_ids
+                or len(tile_ids)!=annual.get("tile_count") or not isinstance(tiles,dict)
+                or set(tile_ids)!=set(tiles)
+                or any(tiles[tile_id].get("status")!="complete" for tile_id in tile_ids)):
+            raise ValueError(f"Only a complete folder run can be compared: {folder}")
+        graph_dir=Path(annual["combined_graph_directory"]).resolve()
+        combined=load_stage4_result(graph_dir)
+        if (graph_dir.parent.parent.parent!=folder
+                or combined.graph["selected_tile_ids"]!=sorted(tile_ids)
+                or combined.graph["source_image_id"]!=Path(annual["source_raster"]).stem):
+            raise ValueError(f"Combined graph does not match the complete folder run: {folder}")
+        if register_images:
+            image=Path(annual["source_raster"])
+            expected=annual.get("input_sha256",{}).get(str(image))
+            if not expected or not image.is_file() or _digest(image)!=expected:
+                raise ValueError(f"Annual source raster changed since graph creation: {image}")
+        sources.append({"year":int(annual["year"]),"graph_directory":str(graph_dir),
+                        "image_path":str(annual["source_raster"])})
+        run_inputs.extend((record,graph_dir/"manifest.json",graph_dir/"graph.json"))
+    if sources[0]["year"]>=sources[1]["year"]:
+        raise ValueError("--first must be the earlier year and --second the later year")
+    if registration_json:
+        registration=json.loads(path(registration_json).read_text(encoding="utf-8"))
+        sources[1]["registration"]=registration
+    elif register_images:
+        sources[1]["register_to_reference"]=True
+    cfg=load_config(path(config)) if not isinstance(config,dict) else copy.deepcopy(config)
+    if boundary_tolerance is not None:
+        cfg["stage5"]["changes"]["boundary_tolerance_m"]=boundary_tolerance
+    output=path(output)
+    series={"name":f"{sources[0]['year']}_{sources[1]['year']}","snapshots":sources}
+    if cfg.get("stage5",{}).get("target_crs"):
+        series["target_crs"]=cfg["stage5"]["target_crs"]
+    signature=hashlib.sha256(json.dumps({
+        "series":series,"stage5_config":cfg.get("stage5",{}),
+        "run_inputs":{str(item):_digest(item) for item in run_inputs},
+    },sort_keys=True,default=str).encode()).hexdigest()
+    manifest=output/"run.json"
+    if manifest.exists():
+        previous=json.loads(manifest.read_text(encoding="utf-8"))
+        if previous.get("status") not in {"failed","running"} or previous.get("input_sha256")!=signature:
+            raise FileExistsError(f"Comparison output already exists with different inputs or is complete: {output}")
+    elif output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Comparison output directory is not empty: {output}")
+    output.mkdir(parents=True,exist_ok=True)
+    atomic_json(output/"series.json",series)
+    state={"status":"running","years":[s["year"] for s in sources],"series":str(output/"series.json"),
+           "input_sha256":signature,"started_at":now()}
+    atomic_json(manifest,state)
+    try:
+        from src.stage5 import build_temporal_graph
+        graph=build_temporal_graph(sources,target_crs=series.get("target_crs"),
+            policy=cfg.get("stage5",{}).get("matching",{}),
+            change_policy=cfg.get("stage5",{}).get("changes",{}),
+            output_directory=output/"01_temporal_graph")
+        if graph["comparisons"][0]["common_coverage_m2"]<=0:
+            raise ValueError("The yearly graphs have no common observed coverage after registration")
+        from src.stage5 import load_stage5_result
+        load_stage5_result(output/"01_temporal_graph")
+        state.update(status="complete",completed_at=now(),
+                     graph_directory=str(output/"01_temporal_graph"),
+                     temporal_graph_image=str(output/"01_temporal_graph"/"temporal_graph.png"),
+                     report_path=str(output/"01_temporal_graph"/"report.json"),
+                     common_coverage_m2=graph["comparisons"][0]["common_coverage_m2"],
+                     node_count=graph["graph"]["node_count"],
+                     spatial_edge_count=graph["graph"]["spatial_edge_count"],
+                     temporal_edge_count=graph["graph"]["temporal_edge_count"],
+                     change_edge_count=graph["graph"]["change_edge_count"],
+                     change_event_count=graph["graph"]["change_event_count"])
+        atomic_json(manifest,state)
+        return state
+    except Exception as exc:
+        state.update(status="failed",error=f"{type(exc).__name__}: {exc}",updated_at=now())
+        atomic_json(manifest,state)
+        raise

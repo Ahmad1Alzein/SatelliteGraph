@@ -208,6 +208,28 @@ def parser() -> argparse.ArgumentParser:
     stage5_build.add_argument("--name", default=None)
     stage5_build.add_argument("--config", default=str(DEFAULT_CONFIG))
     stage5_build.add_argument("--project-root", default=".")
+    folder = commands.add_parser("folder", help="Run all stages for one tile folder, then compare yearly results")
+    folder_phases = folder.add_subparsers(dest="phase", required=True)
+    folder_run = folder_phases.add_parser("run", help="Segment, refine, graph, and combine every tile in one folder")
+    folder_run.add_argument("--folder", required=True, help="Folder of PNG tiles with metadata.csv and a source GeoTIFF")
+    folder_run.add_argument("--year", required=True, type=int)
+    folder_run.add_argument("--output", required=True)
+    folder_run.add_argument("--source-raster", default=None, help="GeoTIFF for tile coordinates, if outside the folder")
+    folder_run.add_argument("--metadata", default=None, help="Tile offset CSV, if outside the folder")
+    folder_run.add_argument("--config", default=str(DEFAULT_CONFIG))
+    folder_run.add_argument("--project-root", default=".")
+    folder_run.add_argument("--no-progress", action="store_true")
+    folder_compare = folder_phases.add_parser("compare", help="Make a temporal graph from two completed folder runs")
+    folder_compare.add_argument("--first", required=True, help="Completed annual output for the earlier year")
+    folder_compare.add_argument("--second", required=True, help="Completed annual output for the later year")
+    folder_compare.add_argument("--output", required=True)
+    registration = folder_compare.add_mutually_exclusive_group()
+    registration.add_argument("--registration-json", default=None, help="Measured cross-year control points JSON")
+    registration.add_argument("--register-images", action="store_true", help="Estimate control points with image matching")
+    folder_compare.add_argument("--boundary-tolerance", type=float, default=None,
+                                help="Ignore change within this spatial distance in metres")
+    folder_compare.add_argument("--config", default=str(DEFAULT_CONFIG))
+    folder_compare.add_argument("--project-root", default=".")
     return root
 
 
@@ -333,6 +355,18 @@ def main(argv: list[str] | None = None) -> None:
             from src.stage5 import run_stage5
             result = run_stage5(args.series, project_root=project_root,
                                 config=args.config, output_name=args.name)
+        elif args.stage == "folder":
+            from src.folder_pipeline import compare_folders, run_folder
+            if args.phase == "run":
+                result = run_folder(args.folder,args.year,args.output,source_raster=args.source_raster,
+                                    metadata=args.metadata,config=args.config,project_root=project_root,
+                                    show_progress=not args.no_progress)
+            else:
+                result = compare_folders(args.first,args.second,args.output,
+                                         registration_json=args.registration_json,
+                                         register_images=args.register_images,
+                                         boundary_tolerance=args.boundary_tolerance,
+                                         config=args.config,project_root=project_root)
         else:  # pragma: no cover - argparse restricts the available stages.
             raise ValueError(f"Unsupported stage: {args.stage}")
     except Exception as exc:
