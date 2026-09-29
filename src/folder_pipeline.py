@@ -25,12 +25,18 @@ def _digest(path: Path) -> str:
     return value.hexdigest()
 
 
-def inspect_folder(folder, *, raster=None, metadata=None):
+def inspect_folder(folder, *, raster=None, metadata=None, image=None):
     """Require real tile offsets and CRS; filenames alone cannot establish location."""
     folder = Path(folder).expanduser().resolve()
     if not folder.is_dir():
         raise FileNotFoundError(f"Tile folder not found: {folder}")
-    tiles = sorted(folder.glob("*.png"))
+    if image is None:
+        tiles = sorted(folder.glob("*.png"))
+    else:
+        selected = Path(image).expanduser().resolve()
+        if selected.parent != folder or selected.suffix.lower() != ".png" or not selected.is_file():
+            raise ValueError(f"Selected image must be one PNG directly inside {folder}: {selected}")
+        tiles = [selected]
     if not tiles:
         raise ValueError(f"No PNG tiles found directly in {folder}")
     if raster is None:
@@ -49,8 +55,11 @@ def inspect_folder(folder, *, raster=None, metadata=None):
             raise ValueError("Tile metadata needs tile_name, x0, and y0 columns")
         rows = list(reader)
     names = [p.name for p in tiles]
-    if len(set(row["tile_name"] for row in rows))!=len(rows) or set(row["tile_name"] for row in rows)!=set(names):
-        raise ValueError("Tile metadata names must match every PNG in the folder exactly once")
+    metadata_names = [row["tile_name"] for row in rows]
+    if (len(set(metadata_names)) != len(rows)
+            or (image is None and set(metadata_names) != set(names))
+            or (image is not None and not set(names).issubset(metadata_names))):
+        raise ValueError("Tile metadata must contain each selected PNG exactly once")
     by_name = {row["tile_name"]:row for row in rows}
     normalized = []
     with rasterio.open(raster) as source:
@@ -118,14 +127,16 @@ def _annual_config(config, output, source, image_name):
 
 
 def run_folder(folder, year, output, *, source_raster=None, metadata=None,
-               config=DEFAULT_CONFIG, project_root=".", show_progress=True):
+               config=DEFAULT_CONFIG, project_root=".", show_progress=True,
+               selected_image=None):
     """Complete Stage 2, automatic Stage 2R, Stage 3, and Stage 4 for every PNG."""
     if isinstance(year,bool) or not isinstance(year,int) or not 1<=year<=9999:
         raise ValueError("year must be an integer in 1..9999")
     root=Path(project_root).resolve()
     path=lambda value: Path(value) if Path(value).is_absolute() else root/value
     inspected=inspect_folder(path(folder),raster=path(source_raster) if source_raster else None,
-                             metadata=path(metadata) if metadata else None)
+                             metadata=path(metadata) if metadata else None,
+                             image=path(selected_image) if selected_image else None)
     output=path(output).resolve()
     if (output==inspected["folder"] or output in inspected["folder"].parents
             or inspected["folder"] in output.parents):
@@ -231,6 +242,19 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
         state.update(status="failed",error=f"{type(exc).__name__}: {exc}",updated_at=now())
         atomic_json(ledger,state)
         raise
+
+
+def run_image(image, year, output, *, source_raster=None, metadata=None,
+              config=DEFAULT_CONFIG, project_root=".", show_progress=True):
+    """Run all annual stages for exactly one PNG, using sidecars in its directory."""
+    root = Path(project_root).resolve()
+    selected = Path(image).expanduser()
+    selected = (selected if selected.is_absolute() else root/selected).resolve()
+    if selected.suffix.lower() != ".png" or not selected.is_file():
+        raise ValueError(f"Input image must be an existing PNG: {selected}")
+    return run_folder(selected.parent, year, output, source_raster=source_raster,
+                      metadata=metadata, config=config, project_root=root,
+                      show_progress=show_progress, selected_image=selected)
 
 
 def compare_folders(first, second, output, *, registration_json=None,

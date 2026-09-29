@@ -208,6 +208,17 @@ def parser() -> argparse.ArgumentParser:
     stage5_build.add_argument("--name", default=None)
     stage5_build.add_argument("--config", default=str(DEFAULT_CONFIG))
     stage5_build.add_argument("--project-root", default=".")
+    image = commands.add_parser("image", help="Run the annual pipeline for exactly one PNG")
+    image_phases = image.add_subparsers(dest="phase", required=True)
+    image_run = image_phases.add_parser("run", help="Segment, refine, and graph one PNG")
+    image_run.add_argument("--image", required=True, help="The one PNG image to process")
+    image_run.add_argument("--year", required=True, type=int)
+    image_run.add_argument("--output", required=True)
+    image_run.add_argument("--source-raster", default=None, help="Georeferenced GeoTIFF, if not beside the PNG")
+    image_run.add_argument("--metadata", default=None, help="Tile offset CSV, if not beside the PNG")
+    image_run.add_argument("--config", default=str(DEFAULT_CONFIG))
+    image_run.add_argument("--project-root", default=".")
+    image_run.add_argument("--no-progress", action="store_true")
     folder = commands.add_parser("folder", help="Run all stages for one tile folder, then compare yearly results")
     folder_phases = folder.add_subparsers(dest="phase", required=True)
     folder_run = folder_phases.add_parser("run", help="Segment, refine, graph, and combine every tile in one folder")
@@ -355,6 +366,13 @@ def main(argv: list[str] | None = None) -> None:
             from src.stage5 import run_stage5
             result = run_stage5(args.series, project_root=project_root,
                                 config=args.config, output_name=args.name)
+        elif args.stage == "image":
+            from src.folder_pipeline import run_image
+
+            result = run_image(args.image, args.year, args.output,
+                               source_raster=args.source_raster, metadata=args.metadata,
+                               config=args.config, project_root=project_root,
+                               show_progress=not args.no_progress)
         elif args.stage == "folder":
             from src.folder_pipeline import compare_folders, run_folder
             if args.phase == "run":

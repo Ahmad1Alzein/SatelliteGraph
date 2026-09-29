@@ -26,6 +26,49 @@ class FolderPipelineTests(unittest.TestCase):
                                         "--output", "c", "--registration-json", "control.json"])
         self.assertEqual(temporal.registration_json, "control.json")
 
+    def test_cli_accepts_one_png_as_the_image_input(self):
+        args = parser().parse_args(["image", "run", "--image", "tiles17_23/2017/tile_00000.png",
+                                    "--year", "2017", "--output", "artifacts/one_tile"])
+        self.assertEqual(args.image, "tiles17_23/2017/tile_00000.png")
+        self.assertEqual(args.year, 2017)
+
+    def test_image_run_processes_only_named_png_from_multitile_folder(self):
+        from src.folder_pipeline import run_image
+        from src.stage4 import load_stage4_result
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root/"2017"
+            folder.mkdir()
+            cfg = load_config(DEFAULT_CONFIG)
+            cfg["stage2"]["instance_model"]["backend"] = "fake"
+            cfg["stage2"]["semantic_model"]["backend"] = "fake"
+            yy, xx = np.indices((64, 128))
+            image = np.empty((64, 128, 4), dtype=np.uint8)
+            image[:, :, 0] = xx + 40
+            image[:, :, 1] = yy + 40
+            image[:, :, 2] = xx + yy + 40
+            image[:, :, 3] = 255
+            with rasterio.open(folder/"source.tif", "w", driver="GTiff", width=128, height=64,
+                               count=3, dtype="uint8", crs="EPSG:32636",
+                               transform=from_origin(500000, 3700000, 1.5, 1.5)) as output:
+                output.write(np.moveaxis(cv2.cvtColor(image, cv2.COLOR_BGRA2RGB), -1, 0))
+            for index, x0 in enumerate((0, 64)):
+                cv2.imwrite(str(folder/f"tile_{index:05d}.png"), image[:, x0:x0+64])
+            with (folder/"metadata.csv").open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=["tile_name", "x0", "y0", "width", "height"])
+                writer.writeheader()
+                for index, x0 in enumerate((0, 64)):
+                    writer.writerow(dict(tile_name=f"tile_{index:05d}.png", x0=x0, y0=0,
+                                         width=64, height=64))
+            result = run_image("2017/tile_00000.png", 2017, "single_run",
+                               config=cfg, project_root=root, show_progress=False)
+            state = json.loads((root/"single_run/run.json").read_text())
+            self.assertEqual(result["tile_count"], 1)
+            self.assertEqual(state["tile_ids"], ["source__tile_00000"])
+            self.assertFalse((root/"single_run/stage2/source__tile_00001").exists())
+            self.assertEqual(load_stage4_result(result["combined_graph_directory"]).graph["selected_tile_ids"],
+                             ["source__tile_00000"])
+
     def test_folder_requires_georeference_and_exact_tile_metadata(self):
         from src.folder_pipeline import inspect_folder
         with tempfile.TemporaryDirectory() as temporary:
