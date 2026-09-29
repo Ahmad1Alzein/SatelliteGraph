@@ -1,4 +1,4 @@
-"""Run all processing stages for one georeferenced tile folder, then compare years."""
+"""Run annual processing for folders or individual PNGs, then compare years."""
 from __future__ import annotations
 
 import copy
@@ -26,7 +26,7 @@ def _digest(path: Path) -> str:
 
 
 def inspect_folder(folder, *, raster=None, metadata=None, image=None):
-    """Require real tile offsets and CRS; filenames alone cannot establish location."""
+    """Inspect georeferenced tiles, or one unreferenced PNG in local pixels."""
     folder = Path(folder).expanduser().resolve()
     if not folder.is_dir():
         raise FileNotFoundError(f"Tile folder not found: {folder}")
@@ -44,9 +44,23 @@ def inspect_folder(folder, *, raster=None, metadata=None, image=None):
         preferred = [item for item in options if item.stem=="source"]
         raster = preferred[0] if len(preferred)==1 else options[0] if len(options)==1 else None
     raster = Path(raster).expanduser().resolve() if raster is not None else None
+    metadata = Path(metadata).expanduser().resolve() if metadata is not None else folder/"metadata.csv"
+    if image is not None and raster is None and not metadata.exists():
+        tile = tiles[0]
+        pixels = cv2.imread(str(tile), cv2.IMREAD_UNCHANGED)
+        if pixels is None or pixels.ndim != 3 or pixels.shape[2] not in (3, 4):
+            raise ValueError(f"Unreadable RGB/RGBA tile: {tile}")
+        height, width = pixels.shape[:2]
+        alpha = 4 if pixels.shape[2] == 4 else ""
+        valid = int(np.count_nonzero(pixels[:, :, 3])) if alpha else width * height
+        row = dict(tile_id=tile.stem.removeprefix("tile_"), tile_name=tile.name,
+                   x0=0, y0=0, x1=width, y1=height, width=width, height=height,
+                   valid_width=width, valid_height=height, alpha_band=alpha,
+                   valid_pixel_count=valid)
+        return {"folder": folder, "tiles": tiles, "raster": None, "metadata": None,
+                "rows": [row], "coordinate_frame": "local_pixel"}
     if raster is None or not raster.is_file():
         raise ValueError("A georeferenced source raster is required: put one .tif/.tiff in the folder or pass --source-raster")
-    metadata = Path(metadata).expanduser().resolve() if metadata is not None else folder/"metadata.csv"
     if not metadata.is_file():
         raise ValueError("metadata.csv with exact x0/y0 offsets is required (or pass --metadata)")
     with metadata.open(newline="",encoding="utf-8-sig") as stream:
@@ -109,7 +123,8 @@ def inspect_folder(folder, *, raster=None, metadata=None, image=None):
             normalized.append(dict(tile_id=tile.stem.removeprefix("tile_"),tile_name=tile.name,
                 x0=x,y0=y,x1=x+w,y1=y+h,width=w,height=h,
                 valid_width=valid_w,valid_height=valid_h,alpha_band=alpha,valid_pixel_count=valid))
-    return {"folder":folder,"tiles":tiles,"raster":raster,"metadata":metadata,"rows":normalized}
+    return {"folder":folder,"tiles":tiles,"raster":raster,"metadata":metadata,
+            "rows":normalized,"coordinate_frame":"georeferenced"}
 
 
 def _annual_config(config, output, source, image_name):
@@ -141,10 +156,10 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
     if (output==inspected["folder"] or output in inspected["folder"].parents
             or inspected["folder"] in output.parents):
         raise ValueError("Output must be separate from the input tile folder")
-    image_name=inspected["raster"].stem
+    image_name=(inspected["raster"] or inspected["tiles"][0]).stem
     selected=_annual_config(path(config) if not isinstance(config,dict) else config,
-                            output,inspected["raster"],image_name)
-    signature={str(p):_digest(p) for p in [inspected["raster"],inspected["metadata"],*inspected["tiles"]]}
+                            output,inspected["raster"] or inspected["tiles"][0],image_name)
+    signature={str(p):_digest(p) for p in [inspected["raster"],inspected["metadata"],*inspected["tiles"]] if p is not None}
     cfg_hash=hashlib.sha256(json.dumps(selected,sort_keys=True,default=str).encode()).hexdigest()
     ledger=output/"run.json"
     if ledger.exists():
@@ -156,7 +171,9 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
     else:
         output.mkdir(parents=True,exist_ok=True)
         state={"status":"running","year":year,"source_folder":str(inspected["folder"]),
-               "source_raster":str(inspected["raster"]),"source_metadata":str(inspected["metadata"]),
+               "source_raster":str(inspected["raster"]) if inspected["raster"] else None,
+               "source_metadata":str(inspected["metadata"]) if inspected["metadata"] else None,
+               "coordinate_frame":inspected["coordinate_frame"],
                "tile_count":len(inspected["tiles"]),"tile_ids":[],"input_sha256":signature,
                "config_sha256":cfg_hash,"tiles":{},"started_at":now()}
         atomic_json(ledger,state)
@@ -246,7 +263,7 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
 
 def run_image(image, year, output, *, source_raster=None, metadata=None,
               config=DEFAULT_CONFIG, project_root=".", show_progress=True):
-    """Run all annual stages for exactly one PNG, using sidecars in its directory."""
+    """Run all annual stages for one PNG, with optional geospatial sidecars."""
     root = Path(project_root).resolve()
     selected = Path(image).expanduser()
     selected = (selected if selected.is_absolute() else root/selected).resolve()
@@ -281,6 +298,9 @@ def compare_folders(first, second, output, *, registration_json=None,
                 or set(tile_ids)!=set(tiles)
                 or any(tiles[tile_id].get("status")!="complete" for tile_id in tile_ids)):
             raise ValueError(f"Only a complete folder run can be compared: {folder}")
+        if annual.get("coordinate_frame") == "local_pixel" or not annual.get("source_raster"):
+            raise ValueError(f"Temporal comparison needs a real georeference for {folder}; "
+                             "a PNG-only run has local pixel coordinates")
         graph_dir=Path(annual["combined_graph_directory"]).resolve()
         combined=load_stage4_result(graph_dir)
         if (graph_dir.parent.parent.parent!=folder

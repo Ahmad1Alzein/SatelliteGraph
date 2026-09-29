@@ -69,6 +69,37 @@ class FolderPipelineTests(unittest.TestCase):
             self.assertEqual(load_stage4_result(result["combined_graph_directory"]).graph["selected_tile_ids"],
                              ["source__tile_00000"])
 
+    def test_image_run_accepts_png_only_and_marks_local_pixel_coordinates(self):
+        from src.folder_pipeline import run_image
+        from src.stage4 import load_stage4_result
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root/"2017"
+            folder.mkdir()
+            pixels = np.full((64, 64, 3), 100, dtype=np.uint8)
+            cv2.rectangle(pixels, (10, 10), (30, 30), (30, 160, 210), -1)
+            cv2.imwrite(str(folder/"tile_00000.png"), pixels)
+            cv2.imwrite(str(folder/"tile_00001.png"), pixels)
+            cfg = load_config(DEFAULT_CONFIG)
+            cfg["stage2"]["instance_model"]["backend"] = "fake"
+            cfg["stage2"]["semantic_model"]["backend"] = "fake"
+
+            result = run_image("2017/tile_00000.png", 2017, "single_run",
+                               config=cfg, project_root=root, show_progress=False)
+
+            state = json.loads((root/"single_run/run.json").read_text())
+            combined = load_stage4_result(result["combined_graph_directory"])
+            self.assertEqual(state["tile_count"], 1)
+            self.assertEqual(state["coordinate_frame"], "local_pixel")
+            self.assertIsNone(state["source_raster"])
+            self.assertEqual(combined.graph["source_pixel_extent_xyxy"], [0, 0, 64, 64])
+            self.assertIsNone(combined.graph["crs"])
+            self.assertTrue(Path(result["full_image_with_graph"]).is_file())
+            self.assertFalse((root/"single_run/stage2/tile_00000__tile_00001").exists())
+            from src.folder_pipeline import compare_folders
+            with self.assertRaisesRegex(ValueError, "georeference"):
+                compare_folders("single_run", "single_run", "comparison", project_root=root)
+
     def test_folder_requires_georeference_and_exact_tile_metadata(self):
         from src.folder_pipeline import inspect_folder
         with tempfile.TemporaryDirectory() as temporary:
