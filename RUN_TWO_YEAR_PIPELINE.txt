@@ -1,74 +1,78 @@
-RUN THE 2017 AND 2023 PIPELINE (PowerShell)
+SATELLITEGRAPH: SINGLE IMAGE, FULL FOLDER, AND TWO-YEAR COMPARISON
+Run these PowerShell commands from the SatelliteGraph repository root.
+The Python environment needs the project dependencies and configured model weights.
 
-1. Open PowerShell in the SatelliteGraph repository root.
-   Use the Python environment that has the project dependencies and configured
-   SAM 2/OpenEarthMap model weights. The existing sibling environment is:
+$python = '..\.venv\Scripts\python.exe'
 
-   $python = '..\.venv\Scripts\python.exe'
+1. PROCESS EXACTLY ONE PNG
 
-2. Check that these local inputs exist:
+& $python -m src image run --image 'tiles17_23/2017/tile_00000.png' --year 2017 --output 'artifacts/single_2017_tile_00000'
 
-   tiles17_23/2017/*.png, metadata.csv, selection_2017.tif
-   tiles17_23/2023/*.png, metadata.csv, selection_2023.tif
-   tiles17_23/registration_2017_2023.json
+--image selects the only PNG to process, even if its folder contains other PNGs.
+The command runs segmentation, automatic refinement and noise cleanup, the tile
+graph, and the annual graph. Its main outputs are:
 
-   tiles17_23 is ignored by Git, so a fresh clone needs these files copied in.
-   The two folders currently contain 7 PNG tiles each. Each yearly run processes
-   every PNG directly inside its folder.
+artifacts/single_2017_tile_00000/run.json
+artifacts/single_2017_tile_00000/full_image_with_graph.png
+artifacts/single_2017_tile_00000/full_image_with_analysis_graph.png
 
-3. Run each year. Wait for the first command to finish before starting the next:
+If the PNG's folder contains metadata.csv and a matching georeferenced GeoTIFF,
+the command uses them for source/global coordinates. If the folder has only
+PNGs, it still runs the single image: its graph uses local image pixels with
+the upper-left corner at (0, 0). A PNG alone does not reveal its original
+position, pixel size in metres, or map CRS.
 
-   & $python -m src folder run --folder 'tiles17_23/2017' --year 2017 --output 'artifacts/tiles17_23_runs/2017'
+2. PROCESS EVERY PNG IN EACH YEAR'S FOLDER
 
-   & $python -m src folder run --folder 'tiles17_23/2023' --year 2023 --output 'artifacts/tiles17_23_runs/2023'
+& $python -m src folder run --folder 'tiles17_23/2017' --year 2017 --output 'artifacts/annual_2017'
+& $python -m src folder run --folder 'tiles17_23/2023' --year 2023 --output 'artifacts/annual_2023'
 
-   Each command runs segmentation, automatic refinement and noise cleanup,
-   refinement validation, a graph for every tile, and one combined spatial graph.
-   The yearly output includes:
+Each command runs segmentation, automatic refinement and noise cleanup,
+refinement validation, one graph per tile, and a combined spatial graph for
+that year. Check that both run.json files have status "complete":
 
-   artifacts/tiles17_23_runs/<year>/run.json
-   artifacts/tiles17_23_runs/<year>/full_image_with_graph.png
-   artifacts/tiles17_23_runs/<year>/full_image_with_analysis_graph.png
-   artifacts/tiles17_23_runs/<year>/stage4/year_<year>/01_combined_graph/graph.json
+artifacts/annual_2017/run.json
+artifacts/annual_2023/run.json
 
-   The PNGs show the complete tile mosaic as rendered graph previews. The first
-   includes every graph node and edge; the second is a less crowded analysis view.
-   A failed yearly run can be resumed with the same command if its inputs and
-   configuration have not changed. Check run.json for status "complete".
+The full-image graph overlays are:
 
-4. After BOTH yearly run.json files say "complete", build the temporal graph:
+artifacts/annual_2017/full_image_with_graph.png
+artifacts/annual_2023/full_image_with_graph.png
 
-   & $python -m src folder compare --first 'artifacts/tiles17_23_runs/2017' --second 'artifacts/tiles17_23_runs/2023' --registration-json 'tiles17_23/registration_2017_2023.json' --boundary-tolerance 6 --output 'artifacts/tiles17_23_runs/spatiotemporal'
+The example tiles17_23/2017 and tiles17_23/2023 folders in this workspace
+each have PNG tiles, metadata.csv, and a matching selection_<year>.tif.
+For ANY other full folder, folder run requires tile_name, x0, and y0 in
+metadata.csv and a matching georeferenced source GeoTIFF. If these files are
+stored elsewhere, pass --metadata 'path/to/metadata.csv' and
+--source-raster 'path/to/source.tif' to that year's folder run command.
+The PNG pixels must match the corresponding GeoTIFF windows. A folder of
+only PNGs cannot be combined accurately into one spatial graph because tile
+positions and the map coordinate system are missing. The original tiling
+metadata and georeferenced raster must be recovered or regenerated from the
+original georeferenced image; they cannot be inferred reliably from filenames.
 
-   Inspect these results:
+3. BUILD THE SPATIOTEMPORAL GRAPH FROM TWO COMPLETED YEARLY RESULTS
 
-   artifacts/tiles17_23_runs/spatiotemporal/run.json
-   artifacts/tiles17_23_runs/spatiotemporal/01_temporal_graph/temporal_graph.png
-   artifacts/tiles17_23_runs/spatiotemporal/01_temporal_graph/graph.json
-   artifacts/tiles17_23_runs/spatiotemporal/01_temporal_graph/changes.geojson
-   artifacts/tiles17_23_runs/spatiotemporal/01_temporal_graph/report.json
+& $python -m src folder compare --first 'artifacts/annual_2017' --second 'artifacts/annual_2023' --registration-json 'tiles17_23/registration_2017_2023.json' --output 'artifacts/spatiotemporal_2017_2023'
 
-   The temporal PNG is a schematic graph; use the yearly image overlays and
-   changes.geojson to inspect candidate changes on the imagery. Construction,
-   demolition, appearance, and disappearance labels are candidate mapped changes,
-   not independently verified physical events. A failed comparison can be retried
-   with the same command and unchanged inputs. Use a new output folder if inputs
-   or settings change.
+--first is the earlier completed annual run; --second is the later one.
+The example registration JSON aligns the two years. For other georeferenced
+yearly inputs without measured registration control points, replace
+--registration-json '...' with --register-images to estimate alignment from
+the source images. Do not pass both options. Both yearly graphs must have a
+real georeference and a projected metric target CRS; PNG-only local-pixel runs
+cannot be used with this temporal comparison command.
 
-FOR OTHER YEARLY FOLDERS
+Inspect:
 
-   $tileFolder = 'path/to/tiles'
-   $year = 2020
-   $annualOutput = 'artifacts/my_runs/2020'
-   & $python -m src folder run --folder $tileFolder --year $year --output $annualOutput
+artifacts/spatiotemporal_2017_2023/run.json
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/temporal_graph.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/graph.json
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/changes.geojson
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/report.json
 
-   $earlierOutput = 'artifacts/my_runs/2017'
-   $laterOutput = 'artifacts/my_runs/2020'
-   $temporalOutput = 'artifacts/my_runs/spatiotemporal'
-   & $python -m src folder compare --first $earlierOutput --second $laterOutput --output $temporalOutput --register-images
+The temporal PNG is a graph overview. Review candidate changes against the
+yearly image overlays and changes.geojson; construction and demolition are
+model-derived change labels, not independently verified physical events.
 
-   Each tile folder needs metadata.csv with tile_name, x0, and y0 plus a
-   georeferenced .tif/.tiff matching the PNG pixels. Pass --metadata and
-   --source-raster if those files are elsewhere. --register-images estimates
-   cross-year alignment from the GeoTIFF images; use --registration-json with
-   measured control points instead when available. The two options are exclusive.
+Use a new output folder when changing an input, year, or configuration.
