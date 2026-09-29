@@ -62,7 +62,7 @@ def _record(tile_id: str, instance_id: int, name: str, mask: np.ndarray) -> dict
     x0, y0 = int(cols.min()), int(rows.min())
     x1, y1 = int(cols.max()) + 1, int(rows.max()) + 1
     area = int(mask.sum())
-    label_id = {"road": 3, "tree": 4, "buildings": 7}[name]
+    label_id = {"road": 3, "tree": 4, "buildings": 7, "unknown": 8}[name]
     centroid_xy = [float(cols.mean() + 0.5), float(rows.mean() + 0.5)]
     return {
         "instance_id": instance_id,
@@ -201,6 +201,7 @@ def _write_stage2_fixture(
                 {"id": 3, "name": "road"},
                 {"id": 4, "name": "tree"},
                 {"id": 7, "name": "buildings"},
+                {"id": 8, "name": "unknown"},
             ],
         },
     )
@@ -251,6 +252,26 @@ def _write_stage2_fixture(
 def _four_connected_component_count(mask: np.ndarray) -> int:
     count, _ = cv2.connectedComponents(np.ascontiguousarray(mask, dtype=np.uint8), connectivity=4)
     return count - 1
+
+
+def test_automatic_refinement_reassigns_unknown_regions_below_41_pixels(tmp_path: Path) -> None:
+    stage2, config = _write_stage2_fixture(
+        tmp_path, labels_override={1: "unknown", 2: "buildings", 3: "road"}
+    )
+    result = apply_refinement(
+        TILE_ID, project_root=tmp_path, config=config,
+        workflow_mode="automatic", show_progress=False,
+    )
+    validate_refinement_result(result)
+    assert all(record["label"]["name"] != "unknown" for record in result.segments)
+    assert not np.any(result.semantic_map == 8)
+    assert result.valid_mask.all()
+    assert np.all(result.instance_map > 0)
+    assert any(
+        operation.get("decision_source") == "automatic_micro_unknown_omission"
+        for operation in result.operations
+    )
+    assert int(result.report["comparison"]["refined_unknown_pixel_count"]) == 0
 
 
 def test_connectivity_normalization_is_internal_and_micro_fragments_do_not_add_objects(

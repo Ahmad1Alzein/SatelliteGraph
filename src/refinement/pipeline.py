@@ -62,6 +62,7 @@ from .topology import (
     apply_reviewed_operations,
     consolidate_micro_components,
     normalize_4_connected_components,
+    omit_micro_unknowns,
 )
 from .unknown_cleanup import evaluate_unknown_cleanup_candidates
 from .validation import ValidationReport, validate_refined_segmentation
@@ -348,6 +349,12 @@ def apply_refinement(
             rgb_image=evidence_rgb,
             policy_config=refinement_config,
         )
+        if selected_mode == "automatic":
+            refined = omit_micro_unknowns(
+                refined, maximum_area_pixels=40,
+                semantic_probabilities=source.semantic_probabilities,
+                tile_metadata=source.result.tile_metadata,
+            )
         refined = consolidate_micro_components(
             refined,
             minimum_object_component_area_pixels=int(

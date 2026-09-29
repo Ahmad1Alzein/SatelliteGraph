@@ -530,6 +530,164 @@ def consolidate_micro_components(
     )
 
 
+def omit_micro_unknowns(
+    result: RefinementResult,
+    *,
+    maximum_area_pixels: int = 40,
+    semantic_probabilities: np.ndarray | None = None,
+    tile_metadata: Mapping[str, Any] | None = None,
+) -> RefinementResult:
+    """Absorb sub-41-pixel unknowns into a directly adjacent known entity.
+
+    This deterministic last-resort pass keeps every observed pixel. Contact
+    length decides the target; target-class probability breaks contact ties.
+    Sources without any adjacent known entity remain unknown and are counted
+    explicitly rather than assigned an invented class.
+    """
+
+    _validate_result(result)
+    if isinstance(maximum_area_pixels, bool) or not 1 <= maximum_area_pixels <= 40:
+        raise ValueError("maximum_area_pixels must be in 1..40")
+    probabilities = None if semantic_probabilities is None else np.asarray(semantic_probabilities)
+    ids = result.instance_map.copy()
+    semantics = result.semantic_map.copy()
+    confidence = result.confidence_map.copy() if result.confidence_map is not None else None
+    records = {int(record["instance_id"]): copy.deepcopy(record) for record in result.records}
+    masks = {int(record["instance_id"]): np.asarray(mask, dtype=bool).copy()
+             for record, mask in zip(result.records, result.masks)}
+    tile_id = _tile_id(result)
+    pending: list[dict[str, Any]] = []
+
+    while True:
+        changed = False
+        for source_id in sorted(records, key=lambda value: (int(masks[value].sum()), value)):
+            source = records.get(source_id)
+            if source is None or _record_class_id(source) != 8:
+                continue
+            source_mask = masks[source_id]
+            area = int(source_mask.sum())
+            if area > maximum_area_pixels:
+                continue
+            adjacent = np.concatenate((
+                ids[1:, :][source_mask[:-1, :]],
+                ids[:-1, :][source_mask[1:, :]],
+                ids[:, 1:][source_mask[:, :-1]],
+                ids[:, :-1][source_mask[:, 1:]],
+            ))
+            contacts = np.bincount(adjacent, minlength=max(records) + 1)
+            choices = []
+            for target_id, target in records.items():
+                if _record_class_id(target) == 8 or contacts[target_id] == 0:
+                    continue
+                class_id = _record_class_id(target)
+                probability = (
+                    float(np.mean(probabilities[class_id][source_mask]))
+                    if probabilities is not None and class_id < probabilities.shape[0]
+                    else 0.0
+                )
+                choices.append((int(contacts[target_id]), probability, -target_id, target_id))
+            if not choices:
+                continue
+            shared_sides, probability, _, target_id = max(choices)
+            target = records[target_id]
+            class_id = _record_class_id(target)
+            target_mask = masks[target_id] | source_mask
+            target_entity_id = str(target["entity_id"])
+            evidence = {
+                "source_area_pixels": area,
+                "shared_boundary_side_count": shared_sides,
+                "target_class_probability_on_source": probability if probabilities is not None else None,
+                "target_selection": "maximum_shared_boundary_then_probability_then_instance_id",
+                "semantic_assignment_is_inferred": True,
+            }
+            parameters = {"maximum_area_pixels": maximum_area_pixels,
+                          "target_class_id": class_id, "cross_class_absorb": True,
+                          "same_class_required": False}
+            provisional = make_operation(
+                tile_id, "absorb", [str(source["entity_id"])], [target_entity_id],
+                target_entity_id=target_entity_id, source_instance_ids=[source_id],
+                output_instance_ids=[target_id], parameters=parameters, evidence=evidence,
+                decision_source="automatic_micro_unknown_omission",
+                invariants={"output_union_equals_inputs": True,
+                            "valid_pixel_coverage_unchanged": True,
+                            "semantic_map_unchanged": False},
+            )
+            ids[source_mask] = target_id
+            semantics[source_mask] = class_id
+            if confidence is not None:
+                confidence[source_mask] = (
+                    probabilities[class_id][source_mask]
+                    if probabilities is not None and class_id < probabilities.shape[0]
+                    else 0.0
+                )
+            records[target_id] = build_combined_record(
+                [source, target], target_mask, tile_id=tile_id, instance_id=target_id,
+                entity_id=target_entity_id, segment_id=str(target["segment_id"]),
+                semantic_class_id=class_id, operation_id=str(provisional["operation_id"]),
+                operation_type="absorb", base_entity_id=target_entity_id,
+                semantic_label=target["label"], semantic_label_source=target.get("label_source"),
+                confidence_map=confidence, source_map=result.source_map,
+                tile_metadata=tile_metadata,
+            )
+            masks[target_id] = target_mask
+            del masks[source_id], records[source_id]
+            pending.append(provisional)
+            changed = True
+        if not changed:
+            break
+
+    rebuilt_map = np.zeros(ids.shape, dtype=np.int32)
+    rebuilt_masks: list[np.ndarray] = []
+    rebuilt_records: list[dict[str, Any]] = []
+    output_ids = {}
+    for new_id, old_id in enumerate(sorted(records), 1):
+        mask = masks[old_id]
+        rebuilt_map[mask] = new_id
+        record = records[old_id]
+        record["instance_id"] = new_id
+        record["mask_index"] = new_id - 1
+        refresh_segment_record(
+            record, mask, semantic_class_id=_record_class_id(record),
+            confidence_map=confidence, source_map=result.source_map,
+            tile_metadata=tile_metadata,
+        )
+        rebuilt_masks.append(mask)
+        rebuilt_records.append(record)
+        output_ids[str(record["entity_id"])] = new_id
+    operations = copy.deepcopy(result.operations)
+    for provisional in pending:
+        operations.append(make_operation(
+            tile_id, "absorb", provisional["source_entity_ids"],
+            provisional["output_entity_ids"],
+            target_entity_id=provisional["target_entity_id"],
+            source_instance_ids=provisional["source_instance_ids"],
+            output_instance_ids=[output_ids[provisional["output_entity_ids"][0]]],
+            parameters=provisional["parameters"], evidence=provisional["evidence"],
+            decision_source=provisional["decision_source"],
+            invariants=provisional["invariants"],
+        ))
+    unresolved = sum(
+        _record_class_id(record) == 8 and int(mask.sum()) <= maximum_area_pixels
+        for record, mask in zip(rebuilt_records, rebuilt_masks)
+    )
+    report = copy.deepcopy(result.report)
+    report["micro_unknown_omission"] = {
+        "maximum_area_pixels": maximum_area_pixels,
+        "absorbed_segment_count": len(pending),
+        "absorbed_pixel_count": sum(int(item["evidence"]["source_area_pixels"]) for item in pending),
+        "unresolved_no_known_neighbor_count": unresolved,
+    }
+    output = RefinementResult(
+        masks=rebuilt_masks, records=rebuilt_records, instance_map=rebuilt_map,
+        semantic_map=semantics, confidence_map=confidence,
+        source_map=result.source_map.copy() if result.source_map is not None else None,
+        valid_mask=result.valid_mask.copy(), operations=operations,
+        lineage=_lineage_document(tile_id, rebuilt_records), report=report,
+    )
+    _validate_result(output)
+    return output
+
+
 def apply_reviewed_operations(
     normalized_result: RefinementResult,
     operations_or_proposals: Sequence[Mapping[str, Any]],
