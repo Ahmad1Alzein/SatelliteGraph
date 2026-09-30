@@ -70,8 +70,10 @@ class FolderPipelineTests(unittest.TestCase):
             self.assertEqual(refinement_report["micro_unknown_omission"]["maximum_area_pixels"], 40)
             self.assertTrue(state["pipeline_revision"])
             self.assertFalse((root/"single_run/stage2/source__tile_00001").exists())
-            self.assertEqual(load_stage4_result(result["combined_graph_directory"]).graph["selected_tile_ids"],
-                             ["source__tile_00000"])
+            combined = load_stage4_result(result["combined_graph_directory"])
+            self.assertEqual(combined.graph["selected_tile_ids"], ["source__tile_00000"])
+            self.assertEqual(Path(result["full_image_with_graph"]).read_bytes(),
+                             Path(combined.artifacts["graph_overlay_audit"]).read_bytes())
             state.pop("pipeline_revision")
             (root/"single_run/run.json").write_text(json.dumps(state))
             with self.assertRaisesRegex(ValueError, "predates"):
@@ -216,6 +218,7 @@ class FolderPipelineTests(unittest.TestCase):
 
     def test_both_folder_commands_complete_with_test_models(self):
         from src.folder_pipeline import compare_folders, run_folder
+        from src.stage4 import load_stage4_result
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             cfg = load_config(DEFAULT_CONFIG)
@@ -246,7 +249,15 @@ class FolderPipelineTests(unittest.TestCase):
                                     show_progress=False)
                 self.assertEqual(result["status"], "complete")
                 self.assertTrue(Path(result["full_image_with_graph"]).is_file())
-                self.assertEqual(json.loads((destination/"run.json").read_text())["tiles"]["source__tile_00000"]["refinement_validation"]["status"], "valid")
+                state = json.loads((destination/"run.json").read_text())
+                self.assertEqual(state["tiles"]["source__tile_00000"]["refinement_validation"]["status"], "valid")
+                self.assertTrue(state["pipeline_revision"])
+                report = json.loads((destination/"stage2/source__tile_00000/13_refinement/report.json").read_text())
+                self.assertEqual(report["micro_unknown_omission"]["maximum_area_pixels"], 40)
+                self.assertTrue(report["micro_unknown_omission"]["enabled"])
+                combined = load_stage4_result(result["combined_graph_directory"])
+                self.assertEqual(Path(result["full_image_with_graph"]).read_bytes(),
+                                 Path(combined.artifacts["graph_overlay_audit"]).read_bytes())
                 repeated = run_folder(folder, year, destination, config="fake-config.yaml", project_root=root,
                                       show_progress=False)
                 self.assertEqual(repeated["combined_graph_directory"],result["combined_graph_directory"])
