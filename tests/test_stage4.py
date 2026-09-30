@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 from PIL import Image
-from shapely.geometry import MultiPolygon, Point, box, shape
+import pytest
+from shapely.geometry import MultiPolygon, Point, box, mapping, shape
 
 from src.cli import parser
 from src.config import stage4_config_hash
@@ -15,6 +16,30 @@ from src.stage4 import combine_tile_graphs, load_stage4_result
 from src.stage4.pipeline import _TileInput, _assign_ownership
 from src.stage4.pipeline import _analysis_view
 from tests.test_refinement import _write_stage2_fixture
+
+
+def test_stage4_rejects_adjacency_between_regions_that_do_not_touch() -> None:
+    from src.stage4.schema import SCHEMA_VERSION, make_combined_edge_id, validate_combined_graph
+
+    nodes = [
+        {"node_id": name, "instance_id": index, "member_node_ids": [name],
+         "geometry_source_pixel": mapping(geometry), "segment_type": {"id": 1},
+         "area_pixels": 100}
+        for index, (name, geometry) in enumerate(
+            (("left", box(0, 0, 10, 10)), ("right", box(20, 0, 30, 10))), 1
+        )
+    ]
+    edge = {"edge_id": make_combined_edge_id("left", "right"),
+            "source": "left", "target": "right", "same_semantic_class": True,
+            "shared_boundary_length_pixels": 10,
+            "contact_centroid_source_pixel_xy": [15, 5]}
+    document = {"schema_version": SCHEMA_VERSION,
+                "graph": {"directed": False, "multigraph": False,
+                          "node_count": 2, "edge_count": 1,
+                          "selected_tile_ids": ["tile_00000"]},
+                "nodes": nodes, "edges": [edge]}
+    with pytest.raises(ValueError, match="do not share a boundary"):
+        validate_combined_graph(document)
 
 
 def test_disjoint_contacts_use_a_real_boundary_anchor() -> None:
@@ -29,14 +54,14 @@ def test_disjoint_contacts_use_a_real_boundary_anchor() -> None:
     assert anchor.distance(second.boundary) < 1e-9
 
 
-def test_overlay_draws_adjacency_near_contact_instead_of_long_hub_spokes() -> None:
-    from src.stage4.pipeline import _local_edge_line
+def test_overlay_connects_the_two_adjacent_node_markers_via_their_contact() -> None:
+    from src.stage4.pipeline import _node_to_node_edge_line
 
     positions = {"large": [0.0, 0.0], "small": [100.0, 0.0]}
     edge = {"source": "large", "target": "small",
             "contact_anchor_source_pixel_xy": [50.0, 0.0]}
-    assert _local_edge_line(edge, positions, arm_length=8.0) == [
-        [42.0, 0.0], [50.0, 0.0], [58.0, 0.0]
+    assert _node_to_node_edge_line(edge, positions) == [
+        [0.0, 0.0], [50.0, 0.0], [100.0, 0.0]
     ]
 
 

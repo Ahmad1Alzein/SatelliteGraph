@@ -7,6 +7,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from shapely.geometry import Point, shape
+
 
 SCHEMA_VERSION = "satellitegraph.stage4.combined-graph.v1"
 MATCH_SCHEMA_VERSION = "satellitegraph.stage4.overlap-matches.v1"
@@ -46,6 +48,7 @@ def validate_combined_graph(document: Mapping[str, Any]) -> None:
     node_ids: set[str] = set()
     instance_ids: set[int] = set()
     class_by_node: dict[str, int] = {}
+    boundary_by_node: dict[str, Any] = {}
     for node in nodes:
         if not isinstance(node, Mapping):
             raise ValueError("Every Stage 4 node must be a mapping")
@@ -67,6 +70,7 @@ def validate_combined_graph(document: Mapping[str, Any]) -> None:
         node_ids.add(node_id)
         instance_ids.add(instance_id)
         class_by_node[node_id] = int(segment_type["id"])
+        boundary_by_node[node_id] = shape(geometry).boundary
     if instance_ids != set(range(1, len(nodes) + 1)):
         raise ValueError("Stage 4 instance IDs must be contiguous")
 
@@ -84,6 +88,11 @@ def validate_combined_graph(document: Mapping[str, Any]) -> None:
             raise ValueError("Stage 4 edge ID is invalid or duplicated")
         if float(edge.get("shared_boundary_length_pixels", 0)) <= 0:
             raise ValueError("Stage 4 adjacency must have a positive shared boundary")
+        actual_contact = boundary_by_node[source].intersection(boundary_by_node[target])
+        if actual_contact.length < 0.5:
+            raise ValueError("Stage 4 adjacency endpoints do not share a boundary")
+        if abs(actual_contact.length - float(edge["shared_boundary_length_pixels"])) > 0.51:
+            raise ValueError("Stage 4 adjacency length disagrees with the shared boundary")
         contact = edge.get("contact_centroid_source_pixel_xy")
         if (
             not isinstance(contact, list)
@@ -98,6 +107,8 @@ def validate_combined_graph(document: Mapping[str, Any]) -> None:
             or any(not isinstance(value, (int, float)) for value in anchor)
         ):
             raise ValueError("Stage 4 adjacency contact anchor must be a source-pixel point")
+        if anchor is not None and Point(anchor).distance(actual_contact) > 1e-6:
+            raise ValueError("Stage 4 adjacency contact anchor must lie on the shared boundary")
         if bool(edge.get("same_semantic_class")) != (class_by_node[source] == class_by_node[target]):
             raise ValueError("Stage 4 edge semantic flag disagrees with its endpoints")
         seen_pairs.add(pair)

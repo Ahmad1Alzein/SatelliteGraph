@@ -17,7 +17,7 @@ from src.config import DEFAULT_CONFIG, load_config, validate_config
 from src.stage2.artifacts import atomic_json, now
 
 
-ANNUAL_PIPELINE_REVISION = "micro_unknown_omission_contact_anchor_v1"
+ANNUAL_PIPELINE_REVISION = "micro_unknown_omission_node_adjacency_v2"
 
 
 def _digest(path: Path) -> str:

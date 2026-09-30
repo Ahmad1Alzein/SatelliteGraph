@@ -640,24 +640,15 @@ def _contact_anchor(contact_geometry: Any) -> list[float]:
     return [float(point.x), float(point.y)]
 
 
-def _local_edge_line(
+def _node_to_node_edge_line(
     edge: Mapping[str, Any], positions: Mapping[str, Sequence[float]],
-    *, arm_length: float = 8.0,
 ) -> list[list[float]]:
-    """Render adjacency at its boundary without long centroid-to-centroid spokes."""
+    """Connect both node markers through their verified shared boundary."""
 
     contact = np.asarray(edge.get("contact_anchor_source_pixel_xy")
                          or edge["contact_centroid_source_pixel_xy"], dtype=float)
-
-    def local_end(node_id: str) -> list[float]:
-        direction = np.asarray(positions[node_id], dtype=float) - contact
-        distance = float(np.linalg.norm(direction))
-        if distance > arm_length:
-            direction *= arm_length / distance
-        return (contact + direction).tolist()
-
-    return [local_end(str(edge["source"])), contact.tolist(),
-            local_end(str(edge["target"]))]
+    return [list(positions[str(edge["source"])]), contact.tolist(),
+            list(positions[str(edge["target"])])]
 
 
 def _graph_metadata(
@@ -948,7 +939,7 @@ def _save_visualization(path: Path, nodes: Sequence[Mapping[str, Any]], edges: S
     colors = ["#cdbd7b", "#9c7a56", "#b0b0b0", "#ffd81f", "#278c36", "#3a8fd4", "#d4c85a", "#df4747", "#8555a5"]
     figure, axis = plt.subplots(figsize=(12, 8), constrained_layout=True)
     if edges:
-        lines = [_local_edge_line(edge, positions) for edge in edges]
+        lines = [_node_to_node_edge_line(edge, positions) for edge in edges]
         axis.add_collection(LineCollection(lines, colors="#66717e", linewidths=0.35, alpha=0.35))
     if nodes:
         areas = np.asarray([node["area_pixels"] for node in nodes], dtype=float)
@@ -1046,7 +1037,7 @@ def _save_combined_overlay(
         for node in nodes
     }
     if edges:
-        lines = [_local_edge_line(edge, positions) for edge in edges]
+        lines = [_node_to_node_edge_line(edge, positions) for edge in edges]
         contacts = [edge.get("contact_anchor_source_pixel_xy") or
                     edge["contact_centroid_source_pixel_xy"] for edge in edges]
         shared = np.asarray(
