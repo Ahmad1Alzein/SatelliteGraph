@@ -1038,8 +1038,6 @@ def _save_combined_overlay(
     }
     if edges:
         lines = [_node_to_node_edge_line(edge, positions) for edge in edges]
-        contacts = [edge.get("contact_anchor_source_pixel_xy") or
-                    edge["contact_centroid_source_pixel_xy"] for edge in edges]
         shared = np.asarray(
             [edge["shared_boundary_side_count"] for edge in edges], dtype=float
         )
@@ -1052,15 +1050,6 @@ def _save_combined_overlay(
                 alpha=0.48,
                 zorder=2,
             )
-        )
-        axis.scatter(
-            [contact[0] for contact in contacts],
-            [contact[1] for contact in contacts],
-            s=3.0,
-            c="#00d7ff",
-            edgecolors="none",
-            alpha=0.65,
-            zorder=2.5,
         )
     if nodes:
         areas = np.asarray([node["area_pixels"] for node in nodes], dtype=float)
