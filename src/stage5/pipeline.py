@@ -134,7 +134,10 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
         ids = {n["source_node_id"]: n["node_id"] for n in yearly_nodes}
         for original in document["edges"]:
             metadata = {**document["graph"], **snapshot.get("georeference", {})}
-            contact = project_point(original["contact_centroid_source_pixel_xy"], metadata, target)
+            source_contact = original.get("contact_anchor_source_pixel_xy")
+            if source_contact is None:
+                source_contact = original["contact_centroid_source_pixel_xy"]
+            contact = project_point(source_contact, metadata, target)
             if "affine" in registration:
                 contact = list(affine_geometry(Point(contact), registration["affine"]).coords[0])
             spatial_edges.append({"edge_id": _identity("spatial", [year, original["edge_id"]]),

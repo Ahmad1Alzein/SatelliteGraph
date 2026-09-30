@@ -65,9 +65,18 @@ class FolderPipelineTests(unittest.TestCase):
             state = json.loads((root/"single_run/run.json").read_text())
             self.assertEqual(result["tile_count"], 1)
             self.assertEqual(state["tile_ids"], ["source__tile_00000"])
+            refinement_report = json.loads((root/"single_run/stage2/source__tile_00000/13_refinement/report.json").read_text())
+            self.assertTrue(refinement_report["micro_unknown_omission"]["enabled"])
+            self.assertEqual(refinement_report["micro_unknown_omission"]["maximum_area_pixels"], 40)
+            self.assertTrue(state["pipeline_revision"])
             self.assertFalse((root/"single_run/stage2/source__tile_00001").exists())
             self.assertEqual(load_stage4_result(result["combined_graph_directory"]).graph["selected_tile_ids"],
                              ["source__tile_00000"])
+            state.pop("pipeline_revision")
+            (root/"single_run/run.json").write_text(json.dumps(state))
+            with self.assertRaisesRegex(ValueError, "predates"):
+                run_image("2017/tile_00000.png", 2017, "single_run",
+                          config=cfg, project_root=root, show_progress=False)
 
     def test_image_run_accepts_png_only_and_marks_local_pixel_coordinates(self):
         from src.folder_pipeline import run_image

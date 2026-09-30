@@ -17,6 +17,9 @@ from src.config import DEFAULT_CONFIG, load_config, validate_config
 from src.stage2.artifacts import atomic_json, now
 
 
+ANNUAL_PIPELINE_REVISION = "micro_unknown_omission_contact_anchor_v1"
+
+
 def _digest(path: Path) -> str:
     value = hashlib.sha256()
     with path.open("rb") as stream:
@@ -141,6 +144,16 @@ def _annual_config(config, output, source, image_name):
     return cfg
 
 
+def _require_micro_unknown_omission(refined):
+    omission = refined.report.get("micro_unknown_omission", {})
+    if (omission.get("enabled") is not True
+            or omission.get("maximum_area_pixels") != 40):
+        raise RuntimeError(
+            "Automatic refinement did not record the required sub-41-pixel "
+            "unknown cleanup"
+        )
+
+
 def run_folder(folder, year, output, *, source_raster=None, metadata=None,
                config=DEFAULT_CONFIG, project_root=".", show_progress=True,
                selected_image=None):
@@ -164,13 +177,20 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
     ledger=output/"run.json"
     if ledger.exists():
         state=json.loads(ledger.read_text(encoding="utf-8"))
+        if state.get("pipeline_revision") != ANNUAL_PIPELINE_REVISION:
+            raise ValueError(
+                "Existing annual run predates the current refinement and graph pipeline; "
+                "choose another output folder"
+            )
         if state.get("year")!=year or state.get("input_sha256")!=signature or state.get("config_sha256")!=cfg_hash:
             raise ValueError("Existing run has a different year, input content, or configuration; choose another output folder")
     elif output.exists() and any(output.iterdir()):
         raise FileExistsError(f"Output folder already has data but no run.json: {output}")
     else:
         output.mkdir(parents=True,exist_ok=True)
-        state={"status":"running","year":year,"source_folder":str(inspected["folder"]),
+        state={"status":"running","year":year,
+               "pipeline_revision":ANNUAL_PIPELINE_REVISION,
+               "source_folder":str(inspected["folder"]),
                "source_raster":str(inspected["raster"]) if inspected["raster"] else None,
                "source_metadata":str(inspected["metadata"]) if inspected["metadata"] else None,
                "coordinate_frame":inspected["coordinate_frame"],
@@ -200,7 +220,7 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
     from src.stage2.backend import create_backend
     from src.stage2.semantic import create_semantic_backend
     from src.config import instance_config, semantic_config
-    from src.refinement import apply_refinement, validate_refinement
+    from src.refinement import apply_refinement, load_refinement_result, validate_refinement
     from src.stage3 import run_stage3, load_stage3_result
     from src.stage4 import combine_tile_graphs, load_stage4_result
     sam=semantic=None
@@ -208,6 +228,9 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
         for index,tile_id in enumerate(ids,1):
             entry=state["tiles"].get(tile_id,{})
             if entry.get("status")=="complete":
+                _require_micro_unknown_omission(
+                    load_refinement_result(output/"stage2"/tile_id/"13_refinement")
+                )
                 load_stage3_result(output/"stage3"/tile_id/"01_graph")
                 validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
                 continue
@@ -224,6 +247,7 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
             atomic_json(ledger,state)
             refined=apply_refinement(tile_id,project_root=root,config=selected,
                                      workflow_mode="automatic",show_progress=show_progress)
+            _require_micro_unknown_omission(refined)
             entry["refinement"]={"status":"complete","output_directory":str(refined.output_directory)}
             validated=validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
             entry["refinement_validation"]={"status":validated["status"]}

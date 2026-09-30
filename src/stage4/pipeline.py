@@ -585,6 +585,7 @@ def _build_combined_edges(
             shared = contact_geometry.length
             if shared < 0.5:
                 continue
+            anchor = _contact_anchor(contact_geometry)
             count = int(round(shared))
             first_node, second_node = nodes[first_index], nodes[second_index]
             source, target = str(first_node["node_id"]), str(second_node["node_id"])
@@ -607,6 +608,7 @@ def _build_combined_edges(
                         float(contact_geometry.centroid.x),
                         float(contact_geometry.centroid.y),
                     ],
+                    "contact_anchor_source_pixel_xy": anchor,
                     "source_class_id": int(first_node["segment_type"]["id"]),
                     "source_class": str(first_node["segment_type"]["name"]),
                     "target_class_id": int(second_node["segment_type"]["id"]),
@@ -618,6 +620,44 @@ def _build_combined_edges(
             )
     edges.sort(key=lambda row: (row["source_instance_id"], row["target_instance_id"]))
     return edges
+
+
+def _contact_anchor(contact_geometry: Any) -> list[float]:
+    """Choose a point on the longest actual shared-boundary component."""
+
+    pending = [contact_geometry]
+    lines = []
+    while pending:
+        part = pending.pop()
+        if part.geom_type in {"LineString", "LinearRing"} and part.length > 0:
+            lines.append(part)
+        elif hasattr(part, "geoms"):
+            pending.extend(part.geoms)
+    if not lines:
+        raise ValueError("Shared boundary has no positive-length line component")
+    selected = min(lines, key=lambda part: (-part.length, part.bounds))
+    point = selected.interpolate(selected.length / 2)
+    return [float(point.x), float(point.y)]
+
+
+def _local_edge_line(
+    edge: Mapping[str, Any], positions: Mapping[str, Sequence[float]],
+    *, arm_length: float = 8.0,
+) -> list[list[float]]:
+    """Render adjacency at its boundary without long centroid-to-centroid spokes."""
+
+    contact = np.asarray(edge.get("contact_anchor_source_pixel_xy")
+                         or edge["contact_centroid_source_pixel_xy"], dtype=float)
+
+    def local_end(node_id: str) -> list[float]:
+        direction = np.asarray(positions[node_id], dtype=float) - contact
+        distance = float(np.linalg.norm(direction))
+        if distance > arm_length:
+            direction *= arm_length / distance
+        return (contact + direction).tolist()
+
+    return [local_end(str(edge["source"])), contact.tolist(),
+            local_end(str(edge["target"]))]
 
 
 def _graph_metadata(
@@ -908,14 +948,7 @@ def _save_visualization(path: Path, nodes: Sequence[Mapping[str, Any]], edges: S
     colors = ["#cdbd7b", "#9c7a56", "#b0b0b0", "#ffd81f", "#278c36", "#3a8fd4", "#d4c85a", "#df4747", "#8555a5"]
     figure, axis = plt.subplots(figsize=(12, 8), constrained_layout=True)
     if edges:
-        lines = [
-            [
-                positions[edge["source"]],
-                edge["contact_centroid_source_pixel_xy"],
-                positions[edge["target"]],
-            ]
-            for edge in edges
-        ]
+        lines = [_local_edge_line(edge, positions) for edge in edges]
         axis.add_collection(LineCollection(lines, colors="#66717e", linewidths=0.35, alpha=0.35))
     if nodes:
         areas = np.asarray([node["area_pixels"] for node in nodes], dtype=float)
@@ -1013,14 +1046,9 @@ def _save_combined_overlay(
         for node in nodes
     }
     if edges:
-        lines = [
-            [
-                positions[edge["source"]],
-                edge["contact_centroid_source_pixel_xy"],
-                positions[edge["target"]],
-            ]
-            for edge in edges
-        ]
+        lines = [_local_edge_line(edge, positions) for edge in edges]
+        contacts = [edge.get("contact_anchor_source_pixel_xy") or
+                    edge["contact_centroid_source_pixel_xy"] for edge in edges]
         shared = np.asarray(
             [edge["shared_boundary_side_count"] for edge in edges], dtype=float
         )
@@ -1035,8 +1063,8 @@ def _save_combined_overlay(
             )
         )
         axis.scatter(
-            [edge["contact_centroid_source_pixel_xy"][0] for edge in edges],
-            [edge["contact_centroid_source_pixel_xy"][1] for edge in edges],
+            [contact[0] for contact in contacts],
+            [contact[1] for contact in contacts],
             s=3.0,
             c="#00d7ff",
             edgecolors="none",

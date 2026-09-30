@@ -153,6 +153,23 @@ class TemporalGraphTests(unittest.TestCase):
             with np.load(Path(directory)/"graph_arrays.npz") as arrays:
                 self.assertEqual(arrays["spatial_edge_index"].shape,(2,4))
 
+    def test_spatial_edge_projects_boundary_anchor_when_available(self):
+        from src.stage4.schema import make_combined_edge_id
+
+        earlier = graph([(0,0,5,10), (5,0,10,10)])
+        earlier["edges"] = [{"edge_id": make_combined_edge_id("node0", "node1"),
+                             "source": "node0", "target": "node1", "same_semantic_class": True,
+                             "shared_boundary_length_pixels": 10,
+                             "contact_centroid_source_pixel_xy": [5,5],
+                             "contact_anchor_source_pixel_xy": [5,2]}]
+        earlier["graph"]["edge_count"] = 1
+        later = copy.deepcopy(earlier)
+        later["graph"]["id"] = "graph2015"
+        result = build(earlier, later)
+        self.assertEqual(len(result["spatial_edges"]), 2)
+        for edge in result["spatial_edges"]:
+            np.testing.assert_allclose(edge["contact_world_xy"], [500005,3699998])
+
     def test_registration_control_points_must_support_selected_footprint(self):
         far_away = [[0,0],[100,0],[0,100],[100,100],[50,30],[20,80]]
         with self.assertRaisesRegex(ValueError,"cover"):

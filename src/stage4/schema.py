@@ -91,6 +91,13 @@ def validate_combined_graph(document: Mapping[str, Any]) -> None:
             or any(not isinstance(value, (int, float)) for value in contact)
         ):
             raise ValueError("Stage 4 adjacency must record its source-pixel contact")
+        anchor = edge.get("contact_anchor_source_pixel_xy")
+        if anchor is not None and (
+            not isinstance(anchor, list)
+            or len(anchor) != 2
+            or any(not isinstance(value, (int, float)) for value in anchor)
+        ):
+            raise ValueError("Stage 4 adjacency contact anchor must be a source-pixel point")
         if bool(edge.get("same_semantic_class")) != (class_by_node[source] == class_by_node[target]):
             raise ValueError("Stage 4 edge semantic flag disagrees with its endpoints")
         seen_pairs.add(pair)

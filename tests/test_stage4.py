@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PIL import Image
-from shapely.geometry import shape
+from shapely.geometry import MultiPolygon, Point, box, shape
 
 from src.cli import parser
 from src.config import stage4_config_hash
@@ -15,6 +15,29 @@ from src.stage4 import combine_tile_graphs, load_stage4_result
 from src.stage4.pipeline import _TileInput, _assign_ownership
 from src.stage4.pipeline import _analysis_view
 from tests.test_refinement import _write_stage2_fixture
+
+
+def test_disjoint_contacts_use_a_real_boundary_anchor() -> None:
+    from src.stage4.pipeline import _contact_anchor
+
+    first = box(0, 0, 10, 10)
+    second = MultiPolygon([box(-1, 2, 0, 3), box(10, 7, 11, 8)])
+    contact = first.boundary.intersection(second.boundary)
+    assert Point(contact.centroid).distance(first.boundary) > 1
+    anchor = Point(_contact_anchor(contact))
+    assert anchor.distance(first.boundary) < 1e-9
+    assert anchor.distance(second.boundary) < 1e-9
+
+
+def test_overlay_draws_adjacency_near_contact_instead_of_long_hub_spokes() -> None:
+    from src.stage4.pipeline import _local_edge_line
+
+    positions = {"large": [0.0, 0.0], "small": [100.0, 0.0]}
+    edge = {"source": "large", "target": "small",
+            "contact_anchor_source_pixel_xy": [50.0, 0.0]}
+    assert _local_edge_line(edge, positions, arm_length=8.0) == [
+        [42.0, 0.0], [50.0, 0.0], [58.0, 0.0]
+    ]
 
 
 def _build_tile(tmp_path: Path, tile_id: str, *, x0: int, config: dict | None = None) -> dict:
@@ -70,6 +93,11 @@ def test_stage4_merges_duplicate_overlap_nodes_and_owns_pixels_once(tmp_path: Pa
     assert all(len(node["source_tile_ids"]) == 2 for node in result.nodes)
     assert sum(node["area_pixels"] for node in result.nodes) == 16
     assert all(len(edge["contact_centroid_source_pixel_xy"]) == 2 for edge in result.edges)
+    by_id = {node["node_id"]: shape(node["geometry_source_pixel"]) for node in result.nodes}
+    for edge in result.edges:
+        anchor = Point(edge["contact_anchor_source_pixel_xy"])
+        assert anchor.distance(by_id[edge["source"]].boundary) < 1e-9
+        assert anchor.distance(by_id[edge["target"]].boundary) < 1e-9
     overlay_path = Path(result.artifacts["graph_overlay"])
     assert overlay_path.is_file()
     with Image.open(overlay_path) as overlay:
