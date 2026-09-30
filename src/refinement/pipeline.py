@@ -1296,6 +1296,15 @@ def _persist_complete_result(
             if automatic_selection_report is None
             else copy.deepcopy(dict(automatic_selection_report))
         ),
+        "micro_unknown_omission": {
+            "enabled": workflow_mode == "automatic",
+            **copy.deepcopy(refined.report.get("micro_unknown_omission", {
+                "maximum_area_pixels": 40,
+                "absorbed_segment_count": 0,
+                "absorbed_pixel_count": 0,
+                "unresolved_no_known_neighbor_count": 0,
+            })),
+        },
         "unknown_cleanup": {
             "rule_versions": ["micro-unknown-v1", "contextual-micro-v1"],
             "evaluated_count": int(

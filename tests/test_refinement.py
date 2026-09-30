@@ -20,6 +20,7 @@ from src.refinement import (
 from src.refinement.topology import (
     consolidate_micro_components,
     normalize_4_connected_components,
+    omit_micro_unknowns,
 )
 from src.stage2.artifacts import atomic_json, atomic_npz, checksum, manifest, now
 from src.stage2.pipeline import SCHEMA_VERSION as STAGE2_SCHEMA_VERSION
@@ -272,6 +273,33 @@ def test_automatic_refinement_reassigns_unknown_regions_below_41_pixels(tmp_path
         for operation in result.operations
     )
     assert int(result.report["comparison"]["refined_unknown_pixel_count"]) == 0
+    omission = result.report["micro_unknown_omission"]
+    assert omission["enabled"] is True
+    assert omission["maximum_area_pixels"] == 40
+    assert omission["absorbed_segment_count"] > 0
+    assert omission["unresolved_no_known_neighbor_count"] == 0
+
+
+def test_micro_unknown_omission_keeps_a_41_pixel_unknown() -> None:
+    for unknown_area in (40, 41):
+        instance_map = np.array([[1] + [2] * unknown_area], dtype=np.int32)
+        semantic_map = np.array([[3] + [8] * unknown_area], dtype=np.uint8)
+        records = [
+            _record(TILE_ID, instance_id, name, instance_map == instance_id)
+            for instance_id, name in ((1, "road"), (2, "unknown"))
+        ]
+        normalized = normalize_4_connected_components(
+            instance_map, semantic_map, np.ones(instance_map.shape, dtype=np.float32),
+            np.ones(instance_map.shape, dtype=np.uint8),
+            np.ones(instance_map.shape, dtype=bool), records, tile_id=TILE_ID,
+        )
+        refined = omit_micro_unknowns(normalized, maximum_area_pixels=40)
+        unknown_areas = [
+            record["area_pixels"] for record in refined.records
+            if record["label"]["name"] == "unknown"
+        ]
+        assert unknown_areas == ([] if unknown_area == 40 else [41])
+        assert np.all(refined.instance_map > 0)
 
 
 def test_connectivity_normalization_is_internal_and_micro_fragments_do_not_add_objects(
