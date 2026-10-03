@@ -32,6 +32,13 @@ class FolderPipelineTests(unittest.TestCase):
         self.assertEqual(args.image, "tiles17_23/2017/tile_00000.png")
         self.assertEqual(args.year, 2017)
 
+    def test_cli_accepts_two_completed_image_outputs_and_one_tile(self):
+        args = parser().parse_args(["image", "compare", "--first", "annual_2013",
+                                    "--second", "annual_2023", "--tile", "tile_00000.png",
+                                    "--output", "tile_comparison"])
+        self.assertEqual(args.tile, "tile_00000.png")
+        self.assertEqual(args.first, "annual_2013")
+
     def test_image_run_processes_only_named_png_from_multitile_folder(self):
         from src.folder_pipeline import run_image
         from src.stage4 import load_stage4_result
@@ -323,6 +330,16 @@ class FolderPipelineTests(unittest.TestCase):
             moved = compare_folders(*annual, root/"relocated_comparison",
                                     config="fake-config.yaml", project_root=root)
             self.assertEqual(moved["status"], "complete")
+
+            from src.folder_pipeline import compare_images
+            single = compare_images(*annual, root/"single_image_comparison",
+                                    config="fake-config.yaml", project_root=root,
+                                    show_progress=False)
+            self.assertEqual(single["status"], "complete")
+            self.assertEqual(single["tile_name"], "tile_00000.png")
+            self.assertTrue(Path(single["temporal_graph_image"]).is_file())
+            self.assertTrue((root/"single_image_comparison/inputs/year_2017/graph.json").is_file())
+            self.assertTrue((root/"single_image_comparison/inputs/year_2023/graph.json").is_file())
 
 
 if __name__ == "__main__":

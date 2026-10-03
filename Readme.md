@@ -417,6 +417,20 @@ $python = '..\.venv\Scripts\python.exe'
 & $python -m src folder compare --first 'artifacts/tiles17_23_runs/2017' --second 'artifacts/tiles17_23_runs/2023' --registration-json 'tiles17_23/registration_2017_2023.json' --boundary-tolerance 6 --output 'artifacts/tiles17_23_runs/spatiotemporal'
 ```
 
+For a completed `image run` output folder from each year, use `image compare`
+with `--first`, `--second`, and `--output`. To inspect just one saved PNG from
+two multi-tile annual outputs, add `--tile tile_00000.png`:
+
+```powershell
+& $python -m src image compare --first 'artifacts/annual_2013_updated' --second 'artifacts/annual_2023_updated' --tile 'tile_00000.png' --output 'artifacts/temporal_tile_00000_2013_2023'
+```
+
+Both comparison commands render the earlier imagery above the later imagery
+in the same mapped horizontal frame. Small node markers and matched-region
+links remain on the images; dense class-change links are drawn in the gap.
+The complete change edges, including unknown-class transitions, remain in the
+saved graph and GeoJSON.
+
 The third command reads the two completed annual `run.json` files and their
 checksummed Stage 4 graphs. It saves `01_temporal_graph/graph.json`,
 `temporal_graph.png`, `changes.geojson`, reports, and an indexed graph array in

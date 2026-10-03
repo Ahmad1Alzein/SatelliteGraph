@@ -219,6 +219,17 @@ def parser() -> argparse.ArgumentParser:
     image_run.add_argument("--config", default=str(DEFAULT_CONFIG))
     image_run.add_argument("--project-root", default=".")
     image_run.add_argument("--no-progress", action="store_true")
+    image_compare = image_phases.add_parser("compare", help="Compare one completed PNG output in each year")
+    image_compare.add_argument("--first", required=True, help="Earlier completed image or annual output folder")
+    image_compare.add_argument("--second", required=True, help="Later completed image or annual output folder")
+    image_compare.add_argument("--tile", default=None,
+                               help="PNG name when each output contains several tiles, e.g. tile_00000.png")
+    image_compare.add_argument("--output", required=True)
+    image_compare.add_argument("--registration-json", default=None)
+    image_compare.add_argument("--boundary-tolerance", type=float, default=None)
+    image_compare.add_argument("--config", default=str(DEFAULT_CONFIG))
+    image_compare.add_argument("--project-root", default=".")
+    image_compare.add_argument("--no-progress", action="store_true")
     folder = commands.add_parser("folder", help="Run all stages for one tile folder, then compare yearly results")
     folder_phases = folder.add_subparsers(dest="phase", required=True)
     folder_run = folder_phases.add_parser("run", help="Segment, refine, graph, and combine every tile in one folder")
@@ -368,12 +379,20 @@ def main(argv: list[str] | None = None) -> None:
             result = run_stage5(args.series, project_root=project_root,
                                 config=args.config, output_name=args.name)
         elif args.stage == "image":
-            from src.folder_pipeline import run_image
+            from src.folder_pipeline import compare_images, run_image
 
-            result = run_image(args.image, args.year, args.output,
-                               source_raster=args.source_raster, metadata=args.metadata,
-                               config=args.config, project_root=project_root,
-                               show_progress=not args.no_progress)
+            if args.phase == "run":
+                result = run_image(args.image, args.year, args.output,
+                                   source_raster=args.source_raster, metadata=args.metadata,
+                                   config=args.config, project_root=project_root,
+                                   show_progress=not args.no_progress)
+            else:
+                result = compare_images(args.first,args.second,args.output,
+                                        tile_name=args.tile,
+                                        registration_json=args.registration_json,
+                                        boundary_tolerance=args.boundary_tolerance,
+                                        config=args.config,project_root=project_root,
+                                        show_progress=not args.no_progress)
         elif args.stage == "folder":
             from src.folder_pipeline import compare_folders, run_folder
             if args.phase == "run":

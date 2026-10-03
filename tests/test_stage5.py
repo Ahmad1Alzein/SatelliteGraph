@@ -58,6 +58,26 @@ class TemporalGraphTests(unittest.TestCase):
         self.assertEqual(result["nodes"][0]["track_id"], result["nodes"][1]["track_id"])
         self.assertAlmostEqual(shape(result["nodes"][0]["geometry_world"]).area, 100)
 
+    def test_preview_stacks_raw_images_vertically(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, second = root/"first.png", root/"second.png"
+            Image.new("RGB", (40, 40), (245, 20, 20)).save(first)
+            Image.new("RGB", (40, 40), (20, 200, 20)).save(second)
+            sources = [
+                {"year": year, "document": graph([(0, 0, 40, 40)], year=year),
+                 "preview_tiles": [{"path": str(path), "x0": 0, "y0": 0,
+                                    "width": 40, "height": 40}]}
+                for year, path in ((2005, first), (2015, second))
+            ]
+            build_temporal_graph(sources, output_directory=root/"result")
+            pixels = np.asarray(Image.open(root/"result/temporal_graph.png").convert("RGB"))
+            self.assertGreater(pixels.shape[0], pixels.shape[1])
+            top, bottom = pixels[:pixels.shape[0]//2], pixels[pixels.shape[0]//2:]
+            self.assertGreater(np.count_nonzero((top[:,:,0]>180)&(top[:,:,1]<80)), 1000)
+            self.assertGreater(np.count_nonzero((bottom[:,:,1]>130)&(bottom[:,:,0]<80)), 1000)
+
     def test_missing_crs_and_geographic_target_rejected(self):
         a = graph([(0, 0, 10, 10)], crs=None)
         with self.assertRaisesRegex(ValueError, "CRS"):

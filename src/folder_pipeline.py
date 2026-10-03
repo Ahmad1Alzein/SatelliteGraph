@@ -298,6 +298,35 @@ def run_image(image, year, output, *, source_raster=None, metadata=None,
                       show_progress=show_progress, selected_image=selected)
 
 
+def _staged_preview_tiles(folder, annual, source_image_id):
+    """Find the exact PNGs and source-pixel windows saved by an annual run."""
+    metadata = folder/"inputs"/"metadata"/f"{source_image_id}.csv"
+    if not metadata.is_file():
+        raise FileNotFoundError(f"Saved tile metadata is missing: {metadata}")
+    with metadata.open(newline="", encoding="utf-8-sig") as stream:
+        rows = list(csv.DictReader(stream))
+    by_id = {f"{source_image_id}__{Path(row['tile_name']).stem}": row for row in rows}
+    if len(by_id) != len(rows) or not set(annual["tile_ids"]).issubset(by_id):
+        raise ValueError("Saved tile metadata does not match this annual run")
+    tiles = {}
+    for tile_id in annual["tile_ids"]:
+        row = by_id[tile_id]
+        image = folder/"inputs"/"tiles"/source_image_id/row["tile_name"]
+        if not image.is_file():
+            raise FileNotFoundError(f"Saved tile PNG is missing: {image}")
+        expected = {digest for original, digest in annual.get("input_sha256", {}).items()
+                    if Path(original).name == image.name}
+        if expected and _digest(image) not in expected:
+            raise ValueError(f"Saved tile PNG changed since graph creation: {image}")
+        width, height = int(row["width"]), int(row["height"])
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Invalid saved tile dimensions for {image.name}")
+        tiles[tile_id] = {"path": str(image), "tile_id": tile_id,
+                          "tile_name": image.name, "x0": int(row["x0"]),
+                          "y0": int(row["y0"]), "width": width, "height": height}
+    return metadata, tiles
+
+
 def compare_folders(first, second, output, *, registration_json=None,
                     register_images=False, boundary_tolerance=None,
                     config=DEFAULT_CONFIG, project_root=".", show_progress=True):
@@ -336,9 +365,12 @@ def compare_folders(first, second, output, *, registration_json=None,
             expected=annual.get("input_sha256",{}).get(str(image))
             if not expected or not image.is_file() or _digest(image)!=expected:
                 raise ValueError(f"Annual source raster changed since graph creation: {image}")
+        saved_metadata, preview_tiles = _staged_preview_tiles(folder, annual, combined.graph["source_image_id"])
         sources.append({"year":int(annual["year"]),"graph_directory":str(graph_dir),
-                        "image_path":str(annual["source_raster"])})
-        run_inputs.extend((record,graph_dir/"manifest.json",graph_dir/"graph.json"))
+                        "image_path":str(annual["source_raster"]),
+                        "preview_tiles":list(preview_tiles.values())})
+        run_inputs.extend((record,graph_dir/"manifest.json",graph_dir/"graph.json",
+                           saved_metadata,*(Path(tile["path"]) for tile in preview_tiles.values())))
     if sources[0]["year"]>=sources[1]["year"]:
         raise ValueError("--first must be the earlier year and --second the later year")
     if registration_json:
@@ -378,6 +410,124 @@ def compare_folders(first, second, output, *, registration_json=None,
         if graph["comparisons"][0]["common_coverage_m2"]<=0:
             raise ValueError("The yearly graphs have no common observed coverage after registration")
         from src.stage5 import load_stage5_result
+        load_stage5_result(output/"01_temporal_graph")
+        state.update(status="complete",completed_at=now(),
+                     graph_directory=str(output/"01_temporal_graph"),
+                     temporal_graph_image=str(output/"01_temporal_graph"/"temporal_graph.png"),
+                     report_path=str(output/"01_temporal_graph"/"report.json"),
+                     common_coverage_m2=graph["comparisons"][0]["common_coverage_m2"],
+                     node_count=graph["graph"]["node_count"],
+                     spatial_edge_count=graph["graph"]["spatial_edge_count"],
+                     temporal_edge_count=graph["graph"]["temporal_edge_count"],
+                     change_edge_count=graph["graph"]["change_edge_count"],
+                     change_event_count=graph["graph"]["change_event_count"])
+        atomic_json(manifest,state)
+        return state
+    except Exception as exc:
+        state.update(status="failed",error=f"{type(exc).__name__}: {exc}",updated_at=now())
+        atomic_json(manifest,state)
+        raise
+
+
+def compare_images(first, second, output, *, tile_name=None, registration_json=None,
+                   boundary_tolerance=None, config=DEFAULT_CONFIG, project_root=".",
+                   show_progress=True):
+    """Compare one completed PNG graph per year, without rerunning segmentation.
+
+    Single-image run folders need no selector. For annual folders containing
+    several tiles, --tile selects the same saved PNG name in each year.
+    """
+    from src.stage4 import load_stage4_result
+    from src.stage5 import build_temporal_graph, load_stage5_result
+    from src.stage5.subset import clip_combined_graph_to_tile
+
+    root = Path(project_root).resolve()
+    path = lambda value: (Path(value) if Path(value).is_absolute() else root/value).resolve()
+    output = path(output)
+    if tile_name is not None:
+        tile_name = Path(tile_name).name
+        if not tile_name.lower().endswith(".png"):
+            tile_name += ".png"
+    prepared, run_inputs = [], []
+    for source in (first, second):
+        folder = path(source)
+        if output == folder or folder in output.parents or output in folder.parents:
+            raise ValueError("Comparison output must be separate from annual inputs")
+        record = folder/"run.json"
+        if not record.is_file():
+            raise FileNotFoundError(f"Completed image output has no run.json: {folder}")
+        annual = json.loads(record.read_text(encoding="utf-8"))
+        ids, tiles = annual.get("tile_ids"), annual.get("tiles")
+        if (annual.get("status") != "complete" or not isinstance(ids, list) or not ids
+                or len(ids) != annual.get("tile_count") or not isinstance(tiles, dict)
+                or set(ids) != set(tiles)
+                or any(tiles[tile_id].get("status") != "complete" for tile_id in ids)):
+            raise ValueError(f"Only completed image or annual outputs can be compared: {folder}")
+        if annual.get("coordinate_frame") == "local_pixel" or not annual.get("source_raster"):
+            raise ValueError("Single-image temporal comparison needs a real georeference")
+        graph_dir = folder/"stage4"/f"year_{annual['year']}"/"01_combined_graph"
+        combined = load_stage4_result(graph_dir)
+        if combined.graph["selected_tile_ids"] != sorted(ids):
+            raise ValueError(f"Combined graph does not match the completed run: {folder}")
+        saved_metadata, preview_tiles = _staged_preview_tiles(folder, annual, combined.graph["source_image_id"])
+        if tile_name is None:
+            if len(preview_tiles) != 1:
+                raise ValueError("Multi-tile annual outputs require --tile tile_00000.png")
+            selected_id = next(iter(preview_tiles))
+        else:
+            matching = [key for key, value in preview_tiles.items() if value["tile_name"] == tile_name]
+            if len(matching) != 1:
+                raise ValueError(f"Saved tile {tile_name!r} is absent from {folder}")
+            selected_id = matching[0]
+        tile = preview_tiles[selected_id]
+        extent = (tile["x0"], tile["y0"], tile["x0"]+tile["width"], tile["y0"]+tile["height"])
+        document = {"schema_version":"satellitegraph.stage4.combined-graph.v1",
+                    "graph":combined.graph,"nodes":combined.nodes,"edges":combined.edges}
+        selected = clip_combined_graph_to_tile(document, selected_id, extent)
+        prepared.append({"year":int(annual["year"]), "document":selected,
+                         "preview_tiles":[tile], "tile_name":tile["tile_name"]})
+        run_inputs.extend((record,graph_dir/"graph.json",graph_dir/"manifest.json",
+                           saved_metadata,Path(tile["path"])))
+    if prepared[0]["year"] >= prepared[1]["year"]:
+        raise ValueError("--first must be the earlier year and --second the later year")
+    if prepared[0]["tile_name"] != prepared[1]["tile_name"]:
+        raise ValueError("The selected yearly PNGs must have the same tile name")
+    cfg = load_config(path(config)) if not isinstance(config, dict) else copy.deepcopy(config)
+    if boundary_tolerance is not None:
+        cfg["stage5"]["changes"]["boundary_tolerance_m"] = boundary_tolerance
+    if registration_json:
+        registration_path = path(registration_json)
+        prepared[1]["registration"] = json.loads(registration_path.read_text(encoding="utf-8"))
+        run_inputs.append(registration_path)
+    signature = hashlib.sha256(json.dumps({
+        "years":[item["year"] for item in prepared], "tile_name":prepared[0]["tile_name"],
+        "stage5_config":cfg.get("stage5",{}),
+        "run_inputs":{str(item):_digest(item) for item in run_inputs},
+    },sort_keys=True,default=str).encode()).hexdigest()
+    manifest = output/"run.json"
+    if manifest.exists():
+        previous = json.loads(manifest.read_text(encoding="utf-8"))
+        if previous.get("status") not in {"failed","running"} or previous.get("input_sha256") != signature:
+            raise FileExistsError(f"Comparison output already exists with different inputs or is complete: {output}")
+    elif output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Comparison output directory is not empty: {output}")
+    output.mkdir(parents=True, exist_ok=True)
+    state = {"status":"running","years":[item["year"] for item in prepared],
+             "tile_name":prepared[0]["tile_name"],"input_sha256":signature,
+             "started_at":now()}
+    atomic_json(manifest,state)
+    try:
+        for item in prepared:
+            graph_path = output/"inputs"/f"year_{item['year']}"/"graph.json"
+            atomic_json(graph_path,item["document"])
+            item["input_paths"] = [str(graph_path), item["preview_tiles"][0]["path"]]
+        graph = build_temporal_graph(prepared,
+            target_crs=cfg.get("stage5",{}).get("target_crs"),
+            policy=cfg.get("stage5",{}).get("matching",{}),
+            change_policy=cfg.get("stage5",{}).get("changes",{}),
+            output_directory=output/"01_temporal_graph",show_progress=show_progress)
+        if graph["comparisons"][0]["common_coverage_m2"] <= 0:
+            raise ValueError("The selected tiles have no common observed coverage")
         load_stage5_result(output/"01_temporal_graph")
         state.update(status="complete",completed_at=now(),
                      graph_directory=str(output/"01_temporal_graph"),

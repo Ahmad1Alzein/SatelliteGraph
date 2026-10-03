@@ -81,4 +81,23 @@ The temporal PNG is a graph overview. Review candidate changes against the
 yearly image overlays and changes.geojson; construction and demolition are
 model-derived change labels, not independently verified physical events.
 
+4. COMPARE ONE COMPLETED PNG OUTPUT PER YEAR
+
+If both output folders were created with "image run" (one PNG per folder):
+
+& $python -m src image compare --first 'artifacts/single_2013' --second 'artifacts/single_2023' --output 'artifacts/one_tile_2013_2023'
+
+If both output folders contain a full annual run, select one saved PNG:
+
+& $python -m src image compare --first 'artifacts/annual_2013_updated' --second 'artifacts/annual_2023_updated' --tile 'tile_00000.png' --output 'artifacts/temporal_tile_00000_2013_2023'
+
+This uses the completed graphs and saved tile PNGs; it does not rerun
+segmentation or refinement. The selected annual graph is clipped to the
+one tile window. A real source georeference is required in both outputs.
+The preview places the earlier satellite image above the later one at
+their mapped positions, with small nodes and blue matched-region links.
+Class-specific known-land-cover change links are colored in the gap so the
+imagery stays readable. Unknown-class transitions are omitted from the PNG
+preview; every edge remains in graph.json and changes.geojson.
+
 Use a new output folder when changing an input, year, or configuration.

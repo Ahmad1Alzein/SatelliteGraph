@@ -62,6 +62,14 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
                 raise ValueError(f"Stale Stage 4 input: {directory}")
             inputs = [{"path": str(path), "sha256": checksum(path)}
                       for path in (directory/"graph.json", directory/"manifest.json")]
+        extra_paths = [*snapshot.get("input_paths", []),
+                       *(tile["path"] for tile in snapshot.get("preview_tiles", []))]
+        known_paths = {item["path"] for item in inputs}
+        for value in extra_paths:
+            path = Path(value).resolve()
+            if str(path) not in known_paths:
+                inputs.append({"path":str(path), "sha256":checksum(path)})
+                known_paths.add(str(path))
         validate_combined_graph(document)
         if not document["nodes"]:
             raise ValueError("Yearly combined graph must contain observed nodes")
@@ -204,7 +212,12 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
     validate_temporal_graph(document)
     if output_directory is not None:
         from .storage import save_result
-        save_result(Path(output_directory).resolve(), document)
+        preview_layers = [{"year":snapshot["year"], "tiles":snapshot.get("preview_tiles", []),
+                           "source_affine_transform":source["graph"]["source_affine_transform"],
+                           "crs":source["graph"]["crs"],
+                           "registration_affine":registration.get("affine")}
+                          for snapshot, source, registration in zip(ordered, documents, registrations)]
+        save_result(Path(output_directory).resolve(), document, preview_layers=preview_layers)
     return document
 
 
@@ -250,6 +263,9 @@ def run_stage5(series_path, *, project_root=".", config=None, output_name=None):
             if key in snapshot:
                 path = Path(snapshot[key])
                 snapshot[key] = str(path if path.is_absolute() else root/path)
+        for tile in snapshot.get("preview_tiles", []):
+            image = Path(tile["path"])
+            tile["path"] = str(image if image.is_absolute() else root/image)
     name = output_name or series.get("name") or stable_digest(series)[:12]
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
         raise ValueError("Stage 5 output name must be a safe collection name")
