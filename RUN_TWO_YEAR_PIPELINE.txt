@@ -71,6 +71,12 @@ artifacts/spatiotemporal_2017_2023/01_temporal_graph/graph.json
 artifacts/spatiotemporal_2017_2023/01_temporal_graph/changes.geojson
 artifacts/spatiotemporal_2017_2023/01_temporal_graph/report.json
 
+The comparison displays percentage progress while matching source nodes,
+finding cross-year overlaps, and assessing change groups. Add --no-progress
+to suppress these bars. Completed annual output folders can be moved or copied
+together with their stage4 artifacts; the command verifies those artifacts
+against the checksums in each local Stage 4 manifest.
+
 The temporal PNG is a graph overview. Review candidate changes against the
 yearly image overlays and changes.geojson; construction and demolition are
 model-derived change labels, not independently verified physical events.

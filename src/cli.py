@@ -241,6 +241,7 @@ def parser() -> argparse.ArgumentParser:
                                 help="Ignore change within this spatial distance in metres")
     folder_compare.add_argument("--config", default=str(DEFAULT_CONFIG))
     folder_compare.add_argument("--project-root", default=".")
+    folder_compare.add_argument("--no-progress", action="store_true")
     return root
 
 
@@ -384,7 +385,8 @@ def main(argv: list[str] | None = None) -> None:
                                          registration_json=args.registration_json,
                                          register_images=args.register_images,
                                          boundary_tolerance=args.boundary_tolerance,
-                                         config=args.config,project_root=project_root)
+                                         config=args.config,project_root=project_root,
+                                         show_progress=not args.no_progress)
         else:  # pragma: no cover - argparse restricts the available stages.
             raise ValueError(f"Unsupported stage: {args.stage}")
     except Exception as exc:

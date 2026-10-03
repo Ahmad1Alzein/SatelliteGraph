@@ -300,7 +300,7 @@ def run_image(image, year, output, *, source_raster=None, metadata=None,
 
 def compare_folders(first, second, output, *, registration_json=None,
                     register_images=False, boundary_tolerance=None,
-                    config=DEFAULT_CONFIG, project_root="."):
+                    config=DEFAULT_CONFIG, project_root=".", show_progress=True):
     """Read two completed annual runs and build the final Stage 5 graph."""
     if registration_json and register_images:
         raise ValueError("Choose either registration control points or automatic image registration")
@@ -325,7 +325,7 @@ def compare_folders(first, second, output, *, registration_json=None,
         if annual.get("coordinate_frame") == "local_pixel" or not annual.get("source_raster"):
             raise ValueError(f"Temporal comparison needs a real georeference for {folder}; "
                              "a PNG-only run has local pixel coordinates")
-        graph_dir=Path(annual["combined_graph_directory"]).resolve()
+        graph_dir=folder/"stage4"/f"year_{annual['year']}"/"01_combined_graph"
         combined=load_stage4_result(graph_dir)
         if (graph_dir.parent.parent.parent!=folder
                 or combined.graph["selected_tile_ids"]!=sorted(tile_ids)
@@ -374,7 +374,7 @@ def compare_folders(first, second, output, *, registration_json=None,
         graph=build_temporal_graph(sources,target_crs=series.get("target_crs"),
             policy=cfg.get("stage5",{}).get("matching",{}),
             change_policy=cfg.get("stage5",{}).get("changes",{}),
-            output_directory=output/"01_temporal_graph")
+            output_directory=output/"01_temporal_graph", show_progress=show_progress)
         if graph["comparisons"][0]["common_coverage_m2"]<=0:
             raise ValueError("The yearly graphs have no common observed coverage after registration")
         from src.stage5 import load_stage5_result

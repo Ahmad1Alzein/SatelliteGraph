@@ -9,6 +9,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
+from tqdm import tqdm
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,10 @@ def _context_similarity(a, b):
     if not a or not b:
         return 0.5  # missing context is neutral, not evidence of identity
     keys = set(a) | set(b)
-    return 1 - 0.5 * sum(abs(a[k]/sum(a.values()) - b[k]/sum(b.values())) for k in keys)
+    cosine = sum(a[k]*b[k] for k in keys) / math.sqrt(
+        sum(value*value for value in a.values()) * sum(value*value for value in b.values()))
+    distribution = 1 - 0.5 * sum(abs(a[k]/sum(a.values()) - b[k]/sum(b.values())) for k in keys)
+    return 0.5 * (cosine + distribution)
 
 
 def _components(pairs):
@@ -75,7 +79,7 @@ def _components(pairs):
         yield sorted(i for side, i in group if side == 0), sorted(i for side, i in group if side == 1)
 
 
-def match_snapshots(first, second, polygons_a, polygons_b, policy):
+def match_snapshots(first, second, polygons_a, polygons_b, policy, *, show_progress=False):
     """Return indexed links, all nearby candidates, coverage, and observation states."""
     footprint_a, footprint_b = unary_union(polygons_a), unary_union(polygons_b)
     common = footprint_a.intersection(footprint_b)
@@ -86,7 +90,8 @@ def match_snapshots(first, second, polygons_a, polygons_b, policy):
     context_a, context_b = _neighborhoods(first), _neighborhoods(second)
     candidates = []
     tree = STRtree(visible_b)
-    for i, a in enumerate(visible_a):
+    for i, a in enumerate(tqdm(visible_a, desc="Match source nodes", unit="node",
+                               mininterval=1.0, disable=not show_progress)):
         if a.area <= 1e-9:
             continue
         for j in sorted(int(j) for j in tree.query(a.buffer(policy.search_radius_m))):

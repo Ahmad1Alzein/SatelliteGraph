@@ -25,7 +25,8 @@ def _identity(prefix, values):
     return f"{prefix}::{stable_digest(values)[:24]}"
 
 
-def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_policy=None, output_directory=None):
+def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_policy=None,
+                         output_directory=None, show_progress=False):
     """Build from >=2 {year, document|graph_directory} snapshots.
 
     Optional per-snapshot fields: georeference (verified CRS/affine override),
@@ -147,9 +148,11 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
                                   "source_edge": copy.deepcopy(original)})
     for index in range(len(ordered) - 1):
         result = match_snapshots(documents[index], documents[index+1],
-                                 all_polygons[index], all_polygons[index+1], policy)
+                                 all_polygons[index], all_polygons[index+1], policy,
+                                 show_progress=show_progress)
         earlier, later = nodes_by_year[index], nodes_by_year[index+1]
-        changes = detect_change_events(earlier,later,all_polygons[index],all_polygons[index+1],change_policy)
+        changes = detect_change_events(earlier,later,all_polygons[index],all_polygons[index+1],
+                                       change_policy, show_progress=show_progress)
         change_events.extend(changes["events"])
         change_edges.extend(changes["edges"])
         change_assessments.extend(changes["assessments"])

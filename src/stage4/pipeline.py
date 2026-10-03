@@ -187,7 +187,10 @@ def load_stage4_result(output_directory: str | Path) -> Stage4Result:
     if match_document.get("schema_version") != MATCH_SCHEMA_VERSION:
         raise ValueError("Unsupported Stage 4 overlap match schema")
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    artifacts = {str(key): str(value) for key, value in public.get("artifacts", {}).items()}
+    # Manifests may have been copied with a completed annual run. Artifact
+    # names are local to this directory; validate their recorded digests here.
+    artifacts = {str(key): str(directory / Path(str(value)).name)
+                 for key, value in public.get("artifacts", {}).items()}
     for key, path_text in artifacts.items():
         path = Path(path_text)
         if not path.is_file() or checksum(path) != public["artifact_checksums"].get(key):

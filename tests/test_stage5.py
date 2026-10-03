@@ -1,5 +1,6 @@
 """Run without pytest: python -m unittest discover -s tests -p test_stage5.py."""
 import copy
+from collections import Counter
 import json
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from shapely.geometry import box, mapping, shape
 from src.stage4.schema import SCHEMA_VERSION as STAGE4_SCHEMA
 from src.stage5 import build_temporal_graph, load_stage5_result
 from src.stage5.coordinates import project_snapshot
+from src.stage5.matching import _context_similarity
 from src.stage5.registration import fit_registration
 
 
@@ -39,6 +41,12 @@ def build(a, b, **kwargs):
 
 
 class TemporalGraphTests(unittest.TestCase):
+    def test_neighborhood_similarity_uses_cosine_and_class_distribution(self):
+        self.assertAlmostEqual(_context_similarity(Counter({1: 2, 3: 1}),
+                                                    Counter({1: 4, 3: 2})), 1.0)
+        self.assertAlmostEqual(_context_similarity(Counter({1: 3}), Counter({3: 3})), 0.0)
+        self.assertAlmostEqual(_context_similarity(Counter(), Counter({1: 2})), 0.5)
+
     def test_shifted_pixel_origins_match_same_world_object(self):
         a = graph([(10, 0, 20, 10)])
         b = graph([(0, 0, 10, 10)], origin=10, year=2015)

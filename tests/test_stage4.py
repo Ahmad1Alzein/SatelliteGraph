@@ -140,6 +140,16 @@ def test_stage4_merges_duplicate_overlap_nodes_and_owns_pixels_once(tmp_path: Pa
     assert loaded.nodes == result.nodes
     assert loaded.edges == result.edges
 
+    manifest_path = Path(result.output_directory) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"] = {
+        key: str(Path("Z:/old_location") / Path(value).name)
+        for key, value in manifest["artifacts"].items()
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    relocated = load_stage4_result(result.output_directory)
+    assert Path(relocated.artifacts["graph"]) == Path(result.output_directory) / "graph.json"
+
 
 def test_stage4_combines_nonoverlapping_selected_tiles_without_false_matches(
     tmp_path: Path,

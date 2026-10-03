@@ -306,6 +306,24 @@ class FolderPipelineTests(unittest.TestCase):
                                 config="fake-config.yaml", project_root=root)
             self.assertFalse((root/"changed_image").exists())
 
+            for destination in annual:
+                run_path = destination/"run.json"
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                run["combined_graph_directory"] = str(
+                    Path("Z:/old_location") / "stage4" / f"year_{run['year']}" / "01_combined_graph"
+                )
+                run_path.write_text(json.dumps(run), encoding="utf-8")
+                manifest_path = destination/"stage4"/f"year_{run['year']}"/"01_combined_graph"/"manifest.json"
+                saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+                saved["artifacts"] = {
+                    key: str(Path("Z:/old_location") / Path(value).name)
+                    for key, value in saved["artifacts"].items()
+                }
+                manifest_path.write_text(json.dumps(saved), encoding="utf-8")
+            moved = compare_folders(*annual, root/"relocated_comparison",
+                                    config="fake-config.yaml", project_root=root)
+            self.assertEqual(moved["status"], "complete")
+
 
 if __name__ == "__main__":
     unittest.main()

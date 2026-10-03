@@ -5,10 +5,11 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from shapely.geometry import box
 
 from test_stage5 import graph, build
 from src.stage5 import build_temporal_graph, load_stage5_result
-from src.stage5.events import ChangePolicy, CLASS_EVENTS
+from src.stage5.events import ChangePolicy, CLASS_EVENTS, detect_change_events
 
 
 POLICY = {"boundary_tolerance_m":0.0, "minimum_area_m2":1.0, "minimum_relative_change":0.05}
@@ -23,6 +24,25 @@ def kinds(result, class_id):
 
 
 class ChangeEventTests(unittest.TestCase):
+    def test_appearance_with_mixed_dimension_coverage_does_not_crash(self):
+        earlier_polygons = [box(0, 0, 2, 2), box(4, 0, 5, 1)]
+        later_polygons = [box(1, 0, 2, 2), box(3, 0, 4, 1)]
+        earlier = [
+            {"node_id": f"earlier-{index}", "year": 2013,
+             "segment_type": {"id": class_id}, "mean_semantic_confidence": 1.0}
+            for index, class_id in enumerate((1, 2))
+        ]
+        later = [
+            {"node_id": f"later-{index}", "year": 2023,
+             "segment_type": {"id": class_id}, "mean_semantic_confidence": 1.0}
+            for index, class_id in enumerate((0, 2))
+        ]
+        result = detect_change_events(
+            earlier, later, earlier_polygons, later_polygons,
+            ChangePolicy(minimum_area_m2=0.5, boundary_tolerance_m=0.0),
+        )
+        self.assertIn("appeared", {event["relation"] for event in result["events"]})
+
     def test_each_known_class_appearance_and_disappearance(self):
         for class_id in range(8):
             other = (class_id+1)%8
