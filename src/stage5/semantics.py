@@ -68,6 +68,8 @@ def build_semantic_temporal_edges(nodes, matching_edges, change_edges):
             "change_event_ids": sorted({edge["event_id"] for edge in candidates}),
             "matching_edge_id": match["edge_id"] if match else None,
             "local_change_support_m2": chosen["change_support_area_m2"] if chosen else 0.0,
+            "source_anchor_world_xy": (chosen if chosen else match)["source_anchor_world_xy"],
+            "target_anchor_world_xy": (chosen if chosen else match)["target_anchor_world_xy"],
             "interpretation": "candidate_mapped_outcome_not_verified_physical_cause",
         })
     return result

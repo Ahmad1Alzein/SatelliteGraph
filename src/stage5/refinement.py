@@ -83,7 +83,7 @@ def refine_matching_links(result, first, second, polygons_a, polygons_b, policy)
             "retained_link_count":len(result["links"])}
 
 
-def refine_change_events(changes, earlier, later, policy):
+def refine_change_events(changes, earlier, later, policy, spatial_edges=()):
     """Keep strong local support and at most one witness per changed class node.
 
     Unknown/unchanged observations remain in the yearly graph but do not make
@@ -94,6 +94,14 @@ def refine_change_events(changes, earlier, later, policy):
     """
     nodes = {node["node_id"]:node for node in [*earlier,*later]}
     polygons = {node_id:shape(node["geometry_world"]) for node_id,node in nodes.items()}
+    road_neighbors = Counter()
+    for spatial in spatial_edges:
+        source_id, target_id = spatial["source"], spatial["target"]
+        if (source_id in nodes and target_id in nodes and
+                int(nodes[source_id]["segment_type"]["id"]) == 3 and
+                int(nodes[target_id]["segment_type"]["id"]) == 3):
+            road_neighbors[source_id] += 1
+            road_neighbors[target_id] += 1
     by_event = defaultdict(list)
     for edge in changes["edges"]:
         by_event[edge["event_id"]].append(edge)
@@ -157,6 +165,15 @@ def refine_change_events(changes, earlier, later, policy):
                 changed_id = source_id
                 key = ("source",source_id)
             class_polygon = polygons[changed_id]
+            if class_id == 3 and relation in LIFE_CHANGE_RELATIONS:
+                rectangle = class_polygon.minimum_rotated_rectangle
+                vertices = list(rectangle.exterior.coords)
+                sides = [math.dist(vertices[index], vertices[index+1]) for index in range(4)]
+                elongation = max(sides)/max(min(sides), 1e-9)
+                if elongation < 3.0 and not (elongation >= 1.3 and
+                                             road_neighbors[changed_id] >= 2):
+                    removed_edges["compact_road_without_road_context"] += 1
+                    continue
             anchor_distance = class_polygon.representative_point().distance(support.representative_point())
             if (class_id in COMPACT_CLASSES and anchor_distance >
                     max(20.0,2.0*math.sqrt(class_polygon.area))):
@@ -169,6 +186,9 @@ def refine_change_events(changes, earlier, later, policy):
                     removed_edges["weaker_competing_witness"] += 1
                 selected = copy.deepcopy(edge)
                 selected["change_support_area_m2"] = float(support_area)
+                anchor = list(support.representative_point().coords[0])
+                selected["source_anchor_world_xy"] = anchor
+                selected["target_anchor_world_xy"] = anchor.copy()
                 selected["refinement"] = {
                     "local_support_area_m2":float(support_area),
                     "smaller_node_support_fraction":float(support_area/smaller_area),
@@ -206,6 +226,7 @@ def refine_change_events(changes, earlier, later, policy):
                        "minimum_overlap_change_fraction":0.08,
                        "boundary_tolerance_m":policy.boundary_tolerance_m,
                        "compact_class_anchor_distance_m":"max(20, 2*sqrt(class_area_m2))",
+                       "road_change":"elongation >= 3 or elongation >= 1.3 with >= 2 adjacent road nodes",
                        "maximum_witnesses_per_changed_class_node":1},
              "interpretation":"filtered candidate map changes; physical causes need external validation"}
     return {"events":retained_events,"edges":retained_edges,

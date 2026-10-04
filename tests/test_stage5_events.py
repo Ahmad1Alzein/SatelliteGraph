@@ -47,6 +47,37 @@ class ChangeEventTests(unittest.TestCase):
         self.assertEqual(refined["audit"]["removed_edges_by_reason"],
                          {"weaker_competing_witness":1})
 
+    def test_building_construction_uses_local_overlap_anchor_not_remote_region_center(self):
+        result = events(graph([(0,0,100,100)],classes=[0]),
+                        graph([(85,85,95,95)],classes=[7],year=2015))
+        edge = next(edge for edge in result["semantic_temporal_edges"]
+                    if edge["relation"] == "building_constructed")
+        old = next(node for node in result["nodes"] if node["node_id"] == edge["source"])
+        self.assertGreater(abs(old["representative_point_world_xy"][0] -
+                               edge["source_anchor_world_xy"][0]), 30)
+        self.assertEqual(edge["source_anchor_world_xy"], edge["target_anchor_world_xy"])
+        self.assertTrue(500085 <= edge["source_anchor_world_xy"][0] <= 500095)
+
+    def test_compact_isolated_road_label_does_not_claim_construction(self):
+        result = events(graph([(0,0,10,10)],classes=[0]),
+                        graph([(0,0,10,10)],classes=[3],year=2015))
+        self.assertNotIn("road_constructed",
+                         {edge["relation"] for edge in result["semantic_temporal_edges"]})
+        self.assertIn("compact_road_without_road_context",
+                      result["graph"]["change_refinement"][0]["removed_edges_by_reason"])
+
+    def test_elongated_road_label_can_claim_construction(self):
+        result = events(graph([(0,0,30,3)],classes=[0]),
+                        graph([(0,0,30,3)],classes=[3],year=2015))
+        self.assertIn("road_constructed",
+                      {edge["relation"] for edge in result["semantic_temporal_edges"]})
+
+    def test_compact_isolated_road_label_does_not_claim_growth(self):
+        result = events(graph([(0,0,10,10),(10,0,20,10)],classes=[3,0]),
+                        graph([(0,0,15,10),(15,0,20,10)],classes=[3,0],year=2015))
+        self.assertNotIn("road_grew",
+                         {edge["relation"] for edge in result["semantic_temporal_edges"]})
+
     def test_appearance_with_mixed_dimension_coverage_does_not_crash(self):
         earlier_polygons = [box(0, 0, 2, 2), box(4, 0, 5, 1)]
         later_polygons = [box(1, 0, 2, 2), box(3, 0, 4, 1)]
@@ -70,8 +101,9 @@ class ChangeEventTests(unittest.TestCase):
         for class_id in range(8):
             other = (class_id+1)%8
             with self.subTest(class_id=class_id):
-                a = graph([(0,0,10,10)],classes=[other])
-                b = graph([(0,0,10,10)],classes=[class_id],year=2015)
+                bounds = (0,0,30,3) if 3 in (class_id,other) else (0,0,10,10)
+                a = graph([bounds],classes=[other])
+                b = graph([bounds],classes=[class_id],year=2015)
                 forward = events(a,b)
                 backward = events(b,a)
                 self.assertIn(CLASS_EVENTS[class_id]["appeared"], kinds(forward,class_id))
@@ -113,15 +145,17 @@ class ChangeEventTests(unittest.TestCase):
     def test_all_known_classes_expansion_and_contraction(self):
         for cid in range(8):
             other = (cid+1)%8
-            a = graph([(0,0,10,10),(10,0,20,10)],classes=[cid,other])
-            b = graph([(0,0,15,10),(15,0,20,10)],classes=[cid,other],year=2015)
+            before = [(0,0,30,3),(30,0,50,3)] if cid == 3 else [(0,0,10,10),(10,0,20,10)]
+            after = [(0,0,40,3),(40,0,50,3)] if cid == 3 else [(0,0,15,10),(15,0,20,10)]
+            a = graph(before,classes=[cid,other])
+            b = graph(after,classes=[cid,other],year=2015)
             with self.subTest(class_id=cid):
                 expansion = events(a,b)
                 contraction = events(b,a)
                 self.assertIn("expanded",kinds(expansion,cid))
                 self.assertIn("contracted",kinds(contraction,cid))
                 event = next(e for e in expansion["change_events"] if e["class_id"]==cid)
-                self.assertAlmostEqual(event["measurements"]["area_delta_m2"],50)
+                self.assertAlmostEqual(event["measurements"]["area_delta_m2"],30 if cid == 3 else 50)
 
     def test_segmentation_split_is_stable_extent(self):
         a = graph([(0,0,10,10)],classes=[7])
@@ -188,8 +222,9 @@ class ChangeEventTests(unittest.TestCase):
         for old in range(9):
             for new in range(9):
                 with self.subTest(old=old,new=new):
-                    result = events(graph([(0,0,10,10)],classes=[old]),
-                                    graph([(0,0,10,10)],classes=[new],year=2015))
+                    bounds = (0,0,30,3) if 3 in (old,new) else (0,0,10,10)
+                    result = events(graph([bounds],classes=[old]),
+                                    graph([bounds],classes=[new],year=2015))
                     if old==8 or new==8:
                         self.assertEqual(result["change_events"],[])
                     elif old==new:

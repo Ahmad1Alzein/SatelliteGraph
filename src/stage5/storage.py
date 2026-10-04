@@ -58,7 +58,7 @@ def _outcome_label(relation):
     return relation.replace("_"," ").title()
 
 
-def _assign_local_colors(edges, positions, *, radius):
+def _assign_local_colors(edges, positions, *, radius, point_for_edge=None):
     """Color nearby links differently at either end of the year transition."""
     import colorsys
     from scipy.spatial import cKDTree
@@ -74,7 +74,8 @@ def _assign_local_colors(edges, positions, *, radius):
     palette = [palette_color(index) for index in range(36)]
     neighbors = [set() for _ in edges]
     for side in ("source", "target"):
-        points = np.asarray([positions[edge[side]] for edge in edges], float)
+        points = np.asarray([(point_for_edge(edge,side) if point_for_edge else positions[edge[side]])
+                             for edge in edges], float)
         tree = cKDTree(points)
         for index, nearby in enumerate(tree.query_ball_point(points, radius)):
             neighbors[index].update(j for j in nearby if j != index)
@@ -252,6 +253,13 @@ def _preview(path, document, *, prepared=None, mode="overview", relation=None):
     positions = {node["node_id"]:(node["representative_point_world_xy"][0]-x_min,
                                   node["representative_point_world_xy"][1]-y_min+offsets[node["year"]])
                  for node in nodes}
+    node_year = {node["node_id"]:node["year"] for node in nodes}
+
+    def edge_position(edge, side):
+        anchor = edge.get(f"{side}_anchor_world_xy")
+        if anchor is None:
+            return positions[edge[side]]
+        return (anchor[0]-x_min, anchor[1]-y_min+offsets[node_year[edge[side]]])
 
     fig_width = 24 if width/panel_height > 3 else 16
     fig_height = max(12, min(34, fig_width*total_height/width))
@@ -273,7 +281,8 @@ def _preview(path, document, *, prepared=None, mode="overview", relation=None):
     def draw_lines(edges, colors, *, linewidth=1.2, alpha=0.85, halo=True, zorder=3):
         if not edges:
             return
-        segments = [[positions[edge["source"]],positions[edge["target"]]] for edge in edges]
+        segments = [[edge_position(edge,"source"),edge_position(edge,"target")]
+                    for edge in edges]
         if halo:
             ax.add_collection(LineCollection(segments,colors="#08111e",
                                              linewidths=linewidth+1.3,alpha=0.65,zorder=zorder))
@@ -295,7 +304,8 @@ def _preview(path, document, *, prepared=None, mode="overview", relation=None):
     elif mode == "matching":
         selected = outcome_edges
         colors = _assign_local_colors(selected,positions,
-                                      radius=max(8.0,0.06*min(width,panel_height)))
+                                      radius=max(8.0,0.06*min(width,panel_height)),
+                                      point_for_edge=edge_position)
         draw_lines(selected,colors,linewidth=1.9,alpha=0.96)
         title = f"Cross-year segment outcomes: {len(selected)} links"
     elif mode in {"change_all","relation"}:
@@ -303,7 +313,8 @@ def _preview(path, document, *, prepared=None, mode="overview", relation=None):
             edge for edge in change_edges if edge["relation"] == relation]
         if mode == "relation":
             colors = _assign_local_colors(selected,positions,
-                                          radius=max(8.0,0.06*min(width,panel_height)))
+                                          radius=max(8.0,0.06*min(width,panel_height)),
+                                          point_for_edge=edge_position)
             title = f"{relation.replace('_',' ').title()} edges: {len(selected)} full links"
         else:
             colors = [_outcome_color(edge["relation"]) for edge in selected]
@@ -318,21 +329,21 @@ def _preview(path, document, *, prepared=None, mode="overview", relation=None):
         ax.scatter(all_xy[:,0],all_xy[:,1],s=20,c="#ffffff",edgecolors="#08111e",
                    linewidths=0.5,alpha=0.90,zorder=5)
 
-    # One colored marker per incident edge; shared split/merge endpoints show
-    # concentric colors instead of silently inheriting only the last link.
+    # Mark the local footprint support for each edge, including edges whose
+    # source node is a broad land-cover region with a distant representative point.
     incident = defaultdict(list)
     for edge,color in zip(selected,colors):
         for side in ("source","target"):
-            node_id = edge[side]
-            if color not in incident[node_id]:
-                incident[node_id].append(color)
+            point = edge_position(edge,side)
+            if color not in incident[point]:
+                incident[point].append(color)
     max_degree = max((len(values) for values in incident.values()),default=0)
     marker_size = 58 if len(selected) > 350 else 90
     for ring in range(max_degree):
-        group = [(node_id,values) for node_id,values in incident.items() if ring < len(values)]
+        group = [(point,values) for point,values in incident.items() if ring < len(values)]
         if not group:
             continue
-        xy = np.asarray([positions[node_id] for node_id,_ in group])
+        xy = np.asarray([point for point,_ in group])
         sizes = [marker_size+24*(len(values)-ring-1) for _,values in group]
         ax.scatter(xy[:,0],xy[:,1],s=sizes,
                    c=[values[ring] for _,values in group],edgecolors="#08111e",
@@ -355,7 +366,7 @@ def _preview(path, document, *, prepared=None, mode="overview", relation=None):
         fig.legend(handles=handles,loc="center left",bbox_to_anchor=(0.79,0.5),
                    title="Class and outcome",fontsize=11,title_fontsize=13,framealpha=0.97)
     if mode in {"matching","relation"}:
-        fig.text(0.5,0.006,"Each line and its endpoints share a color; nearby links use different colors.",
+        fig.text(0.5,0.006,"Lines and markers show local shared-footprint positions; nearby links use different colors.",
                  ha="center",fontsize=11)
     fig.tight_layout(rect=(0,0,0.78,0.98) if mode == "edge_types" else None,pad=0.4)
     fig.savefig(path,dpi=170 if mode == "relation" else 190)

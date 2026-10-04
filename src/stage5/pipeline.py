@@ -170,7 +170,7 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
         earlier, later = nodes_by_year[index], nodes_by_year[index+1]
         changes = detect_change_events(earlier,later,all_polygons[index],all_polygons[index+1],
                                        change_policy, show_progress=show_progress)
-        changes = refine_change_events(changes, earlier, later, change_policy)
+        changes = refine_change_events(changes, earlier, later, change_policy, spatial_edges)
         change_refinement.append({"source_year":earlier[0]["year"],
                                   "target_year":later[0]["year"], **changes["audit"]})
         change_events.extend(changes["events"])
@@ -179,6 +179,8 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
         for link in result["links"]:
             i, j = link["i"], link["j"]
             a, b = earlier[i], later[j]
+            local_overlap = all_polygons[index][i].intersection(all_polygons[index+1][j])
+            local_anchor = list(local_overlap.representative_point().coords[0])
             limited = min(result["fractions_a"][i], result["fractions_b"][j]) < policy.minimum_visible_fraction
             if link["relation"] == "correspondence":
                 b["track_id"] = a["track_id"]
@@ -189,6 +191,8 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
             temporal_edges.append({"edge_id": _identity("temporal", [a["node_id"], b["node_id"]]),
                 "source": a["node_id"], "target": b["node_id"], "directed": True,
                 "relation": link["relation"], "delta_years": b["year"]-a["year"],
+                "source_anchor_world_xy": local_anchor,
+                "target_anchor_world_xy": local_anchor.copy(),
                 "evidence": evidence,
                 "interpretation": "region_correspondence_not_proven_physical_object_identity",
                 "change": {"semantic_from": classes[0], "semantic_to": classes[1],
