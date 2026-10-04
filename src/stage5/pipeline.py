@@ -17,6 +17,8 @@ from src.stage4.schema import stable_digest, validate_combined_graph
 from .coordinates import affine_geometry, metric_crs, project_snapshot, project_point
 from .matching import MatchPolicy, match_snapshots
 from .events import ChangePolicy, detect_change_events
+from .refinement import refine_change_events, refine_matching_links
+from .semantics import build_semantic_temporal_edges
 from .registration import fit_registration, image_control_points
 from .schema import SCHEMA_VERSION, validate_temporal_graph
 
@@ -115,12 +117,15 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
             polygons = [affine_geometry(p, audit["affine"]) for p in polygons]
             audit["control_points_sha256"] = stable_digest({key: np.asarray(value).tolist()
                 for key, value in registration.items()})
-            audit["point_source"] = "sift_mutual_ratio" if snapshot.get("register_to_reference") else "supplied"
+            audit["point_source"] = ("phase_guided_sift_ransac" if snapshot.get("registration_diagnostics")
+                                     else "sift_mutual_ratio" if snapshot.get("register_to_reference") else "supplied")
+            if snapshot.get("registration_diagnostics"):
+                audit["image_registration"] = copy.deepcopy(snapshot["registration_diagnostics"])
         registrations.append({"year": snapshot["year"], **audit})
         all_polygons.append(polygons)
 
-    nodes, spatial_edges, temporal_edges, comparisons = [], [], [], []
-    change_events, change_edges, change_assessments = [], [], []
+    nodes, spatial_edges, temporal_edges, comparisons, matching_refinement = [], [], [], [], []
+    change_events, change_edges, change_assessments, change_refinement = [], [], [], []
     nodes_by_year = []
     for snapshot, document, polygons, registration in zip(ordered, documents, all_polygons, registrations):
         yearly_nodes = []
@@ -158,9 +163,16 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
         result = match_snapshots(documents[index], documents[index+1],
                                  all_polygons[index], all_polygons[index+1], policy,
                                  show_progress=show_progress)
+        matching_refinement.append({"source_year":ordered[index]["year"],
+                                    "target_year":ordered[index+1]["year"],
+                                    **refine_matching_links(result, documents[index], documents[index+1],
+                                                            all_polygons[index], all_polygons[index+1], policy)})
         earlier, later = nodes_by_year[index], nodes_by_year[index+1]
         changes = detect_change_events(earlier,later,all_polygons[index],all_polygons[index+1],
                                        change_policy, show_progress=show_progress)
+        changes = refine_change_events(changes, earlier, later, change_policy)
+        change_refinement.append({"source_year":earlier[0]["year"],
+                                  "target_year":later[0]["year"], **changes["audit"]})
         change_events.extend(changes["events"])
         change_edges.extend(changes["edges"])
         change_assessments.extend(changes["assessments"])
@@ -194,20 +206,31 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
         comparisons.append({"source_year": ordered[index]["year"], "target_year": ordered[index+1]["year"],
                             "common_coverage_m2": result["common_coverage_m2"],
                             "node_states": result["node_states"], "candidates": result["candidates"]})
+    semantic_edges = build_semantic_temporal_edges(nodes, temporal_edges, change_edges)
     document = {"schema_version": SCHEMA_VERSION, "graph": {
-        "id": _identity("spatiotemporal", [provenance, asdict(policy), asdict(change_policy), target.to_wkt(), registrations]),
+        "id": _identity("spatiotemporal", [provenance, asdict(policy), asdict(change_policy),
+                                         target.to_wkt(), registrations,
+                                         "local_object_change_witness_refinement_v1",
+                                         "local_same_class_lineage_refinement_v1",
+                                         "class_specific_outcome_edges_v1"]),
         "edge_model": "undirected_spatial_and_directed_forward_temporal",
+        "primary_temporal_edge_collection":"semantic_temporal_edges",
+        "raw_temporal_evidence_collections":["temporal_edges","change_edges"],
         "years": sorted(years), "world_crs": target.to_wkt(), "world_units": "metre",
         "node_count": len(nodes), "spatial_edge_count": len(spatial_edges),
         "temporal_edge_count": len(temporal_edges), "matching_policy": asdict(policy),
         "change_edge_count":len(change_edges), "change_event_count":len(change_events),
+        "semantic_temporal_edge_count":len(semantic_edges),
         "all_temporal_edge_count":len(temporal_edges)+len(change_edges),"change_policy":asdict(change_policy),
         "registration": registrations, "snapshots": provenance,
+        "change_refinement": change_refinement,
+        "matching_refinement": matching_refinement,
         "matching_scope": "adjacent_observed_years",
         "coverage_definition": "intersection_of_unions_of_observed_region_polygons",
         "score_calibration": "engineering_heuristic_not_probability"},
         "nodes": nodes, "spatial_edges": spatial_edges, "temporal_edges": temporal_edges,
         "change_edges":change_edges,"change_events":change_events,"change_assessments":change_assessments,
+        "semantic_temporal_edges":semantic_edges,
         "comparisons": comparisons}
     validate_temporal_graph(document)
     if output_directory is not None:
@@ -230,7 +253,20 @@ def load_stage5_result(directory):
     expected = {"graph.json", "graph_arrays.npz", "nodes.geojson", "report.json", "temporal_graph.png"}
     if public["schema_version"] == SCHEMA_VERSION:
         expected.add("changes.geojson")
-    if set(public["artifact_checksums"]) != expected:
+    artifact_names = set(public["artifact_checksums"])
+    new_previews = "preview_index.json" in artifact_names
+    if new_previews:
+        required = expected | {"matching_graph.png", "temporal_links.png",
+                               "change_graph.png", "preview_index.json"}
+        legend_preview = "all_edge_types.png" in artifact_names
+        outcome_preview = "outcome_graph.png" in artifact_names
+        if legend_preview:
+            required.add("all_edge_types.png")
+        if outcome_preview:
+            required.add("outcome_graph.png")
+        if not required.issubset(artifact_names):
+            raise ValueError("Stage 5 manifest has an incomplete preview index")
+    elif artifact_names != expected and artifact_names != expected | {"change_graph.png", "temporal_links.png"}:
         raise ValueError("Stage 5 manifest has an incomplete artifact index")
     for filename, digest in public["artifact_checksums"].items():
         path = directory/filename
@@ -240,6 +276,24 @@ def load_stage5_result(directory):
     if document.get("schema_version") != public["schema_version"]:
         raise ValueError("Stage 5 manifest and graph schema versions disagree")
     validate_temporal_graph(document)
+    if new_previews:
+        if "semantic_temporal_edges" in document:
+            relations = sorted({edge["relation"] for edge in document["semantic_temporal_edges"]
+                                if not edge["relation"].endswith("_unchanged")})
+        else:
+            relations = sorted({edge["relation"] for edge in document["change_edges"]})
+        if artifact_names != required | {f"change_{relation}.png" for relation in relations}:
+            raise ValueError("Stage 5 manifest does not index every observed change relation")
+        index = json.loads((directory/"preview_index.json").read_text(encoding="utf-8"))
+        preview_index = {"whole_graph":"temporal_graph.png", "matching":"matching_graph.png",
+                         "all_changes":"change_graph.png",
+                         "change_by_relation":{relation:f"change_{relation}.png" for relation in relations}}
+        if legend_preview:
+            preview_index["edge_types"] = "all_edge_types.png"
+        if outcome_preview:
+            preview_index["outcomes"] = "outcome_graph.png"
+        if index != preview_index:
+            raise ValueError("Stage 5 preview index disagrees with the graph")
     for snapshot in document["graph"]["snapshots"]:
         for item in snapshot["inputs"]:
             path = Path(item["path"])

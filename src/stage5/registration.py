@@ -14,6 +14,158 @@ from shapely.geometry import MultiPoint
 from .coordinates import metric_crs
 
 
+def staged_tile_control_points(moving_path, moving_affine, moving_crs,
+                               reference_path, reference_affine, reference_crs,
+                               target_crs):
+    """Register two saved satellite PNGs using their approximate georeference.
+
+    Both images are first resampled onto the reference tile's geographic grid.
+    Phase correlation supplies a coarse displacement; SIFT descriptors are
+    searched only near that displacement, then a partial-affine RANSAC keeps
+    geographically distributed landmarks. Returned controls are in the same
+    projected CRS and can be independently fitted by ``fit_registration``.
+    """
+    from pathlib import Path
+    from PIL import Image
+    from scipy.spatial import cKDTree
+    from rasterio.crs import CRS
+    from rasterio.transform import Affine
+    from rasterio.warp import calculate_default_transform, reproject
+
+    target = CRS.from_user_input(metric_crs(target_crs))
+    reference_crs, moving_crs = CRS.from_user_input(reference_crs), CRS.from_user_input(moving_crs)
+    reference_affine, moving_affine = Affine(*reference_affine), Affine(*moving_affine)
+
+    def read(path):
+        with Image.open(Path(path)) as image:
+            pixels = np.asarray(image.convert("RGBA"))
+        return pixels[:, :, :3], pixels[:, :, 3]
+
+    ref_rgb, ref_alpha = read(reference_path)
+    mov_rgb, mov_alpha = read(moving_path)
+    height, width = ref_rgb.shape[:2]
+    if min(height, width) < 32:
+        raise ValueError("Image registration needs tiles at least 32 pixels wide and high")
+    if max(height, width) > 4096 or max(mov_rgb.shape[:2]) > 4096:
+        raise ValueError("Image registration tile exceeds 4096 pixels; use a smaller tile")
+
+    if reference_crs == target:
+        grid = reference_affine
+    else:
+        corners = [reference_affine * point for point in
+                   ((0, 0), (width, 0), (width, height), (0, height))]
+        xs, ys = zip(*corners)
+        grid, width, height = calculate_default_transform(
+            reference_crs, target, width, height,
+            min(xs), min(ys), max(xs), max(ys))
+
+    def warped(rgb, alpha, source_affine, source_crs):
+        result = np.zeros((height, width, 3), np.uint8)
+        valid = np.zeros((height, width), np.uint8)
+        for band in range(3):
+            reproject(rgb[:, :, band], result[:, :, band],
+                      src_transform=source_affine, src_crs=source_crs,
+                      dst_transform=grid, dst_crs=target,
+                      resampling=Resampling.bilinear)
+        reproject(alpha, valid, src_transform=source_affine, src_crs=source_crs,
+                  dst_transform=grid, dst_crs=target, resampling=Resampling.nearest)
+        return result, valid > 0
+
+    ref_rgb, ref_valid = warped(ref_rgb, ref_alpha, reference_affine, reference_crs)
+    mov_rgb, mov_valid = warped(mov_rgb, mov_alpha, moving_affine, moving_crs)
+    overlap = ref_valid & mov_valid
+    if overlap.mean() < 0.35:
+        raise ValueError("Saved yearly PNGs have too little approximate geographic overlap")
+
+    def gray(rgb):
+        value = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        return cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(value)
+
+    reference_gray, moving_gray = gray(ref_rgb), gray(mov_rgb)
+    if np.array_equal(ref_rgb, mov_rgb) and ref_valid.all() and mov_valid.all():
+        # Exact imagery on the same geographic grid provides an exact identity
+        # control set, including featureless synthetic/monochrome tiles.
+        samples = [(x, y) for y in np.linspace(0.1*height, 0.9*height, 3)
+                   for x in np.linspace(0.1*width, 0.9*width, 3)]
+        world = np.asarray([grid * (x, y) for x, y in samples], float)
+        return world.copy(), world.copy(), {
+            "method": "identical_staged_png", "phase_shift_pixels": [0.0, 0.0],
+            "candidate_count": 9, "inlier_count": 9, "inlier_quadrants": 4}
+
+    window = cv2.createHanningWindow((width, height), cv2.CV_32F)
+    moving_phase = moving_gray.astype(np.float32) * overlap
+    reference_phase = reference_gray.astype(np.float32) * overlap
+    shift, response = cv2.phaseCorrelate(moving_phase, reference_phase, window)
+    if (not np.isfinite(shift).all() or response < 0.015
+            or max(abs(shift[0])/width, abs(shift[1])/height) > 0.30):
+        raise ValueError("Image registration could not establish a reliable coarse shift")
+
+    detector = cv2.SIFT_create(nfeatures=12000, contrastThreshold=0.008)
+    reference_mask = cv2.erode(ref_valid.astype(np.uint8), np.ones((7, 7), np.uint8)) * 255
+    moving_mask = cv2.erode(mov_valid.astype(np.uint8), np.ones((7, 7), np.uint8)) * 255
+    ref_keypoints, ref_descriptors = detector.detectAndCompute(reference_gray, reference_mask)
+    mov_keypoints, mov_descriptors = detector.detectAndCompute(moving_gray, moving_mask)
+    if ref_descriptors is None or mov_descriptors is None:
+        raise ValueError("Image registration found too few visual landmarks")
+    ref_xy = np.asarray([point.pt for point in ref_keypoints], np.float32)
+    mov_xy = np.asarray([point.pt for point in mov_keypoints], np.float32)
+    nearby = cKDTree(ref_xy)
+    candidates = []
+    radius = max(8.0, min(14.0, 0.025 * max(width, height)))
+    for i, point in enumerate(mov_xy):
+        indices = nearby.query_ball_point(point + shift, radius)
+        if len(indices) < 2:
+            continue
+        differences = ref_descriptors[indices] - mov_descriptors[i]
+        squared = np.einsum("ij,ij->i", differences, differences)
+        nearest = np.argpartition(squared, 1)[:2]
+        first, second = nearest[np.argsort(squared[nearest])]
+        if squared[first] < 0.85**2 * squared[second]:
+            candidates.append((float(squared[first]), i, indices[first]))
+    candidates.sort()
+    used_reference = set()
+    pairs = []
+    for _, i, j in candidates:
+        if j not in used_reference:
+            pairs.append((i, j))
+            used_reference.add(j)
+    if len(pairs) < 20:
+        raise ValueError("Image registration found too few spatially guided feature pairs")
+    moving_points = mov_xy[[i for i, _ in pairs]]
+    reference_points = ref_xy[[j for _, j in pairs]]
+    cv2.setRNGSeed(42)
+    matrix, mask = cv2.estimateAffinePartial2D(
+        moving_points, reference_points, method=cv2.RANSAC,
+        ransacReprojThreshold=3.0, maxIters=5000, confidence=0.999,
+        refineIters=20)
+    if matrix is None or mask is None:
+        raise ValueError("Image registration could not fit a consistent landmark transform")
+    inliers = mask.ravel().astype(bool)
+    scale = math.hypot(matrix[0, 0], matrix[1, 0])
+    rotation = abs(math.degrees(math.atan2(matrix[1, 0], matrix[0, 0])))
+    quadrants = {(int(x >= width/2), int(y >= height/2))
+                 for x, y in moving_points[inliers]}
+    hull_fraction = MultiPoint(moving_points[inliers]).convex_hull.area / (width*height)
+    residual = np.linalg.norm(moving_points[inliers] @ matrix[:, :2].T
+                              + matrix[:, 2] - reference_points[inliers], axis=1)
+    if (inliers.sum() < 12 or inliers.mean() < 0.08 or len(quadrants) < 3
+            or hull_fraction < 0.12 or not 0.95 <= scale <= 1.05
+            or rotation > 3.0 or np.percentile(residual, 95) > 3.0):
+        raise ValueError("Image registration landmarks are too weak or too local")
+    moving_world = np.asarray([grid * (x+0.5, y+0.5)
+                               for x, y in moving_points[inliers]], float)
+    reference_world = np.asarray([grid * (x+0.5, y+0.5)
+                                  for x, y in reference_points[inliers]], float)
+    return moving_world, reference_world, {
+        "method": "phase_guided_sift_ransac", "phase_shift_pixels": list(map(float, shift)),
+        "phase_response": float(response), "candidate_count": len(pairs),
+        "inlier_count": int(inliers.sum()), "inlier_ratio": float(inliers.mean()),
+        "inlier_quadrants": len(quadrants), "inlier_hull_fraction": float(hull_fraction),
+        "landmark_p95_residual_pixels": float(np.percentile(residual, 95)),
+        "image_affine_pixels": matrix.ravel().tolist(),
+        "accuracy_status": "in_sample_landmarks_not_independent_ground_truth"}
+
+
 def fit_registration(moving_xy, reference_xy, *, max_residual_m=2.0,
                      min_inliers=6, min_inlier_ratio=0.5):
     """Fit moving -> reference world coordinates using RANSAC; reject poor fits.

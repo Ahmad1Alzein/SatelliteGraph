@@ -16,6 +16,80 @@ from src.stage5.matching import _context_similarity
 from src.stage5.registration import fit_registration
 
 
+def test_change_event_identity_distinguishes_shared_support_components():
+    from src.stage5.events import _event_id
+    inputs = (1, "expanded", 2013, 2023, ["a"], ["b"])
+    first = _event_id(*inputs, ["class-a"], ["class-b"], box(0, 0, 3, 3))
+    second = _event_id(*inputs, ["class-a"], ["class-b"], box(1, 0, 4, 3))
+    third = _event_id(*inputs, ["class-c"], ["class-b"], box(0, 0, 3, 3))
+    assert len({first, second, third}) == 3
+
+
+def test_nearby_temporal_links_receive_distinct_colors():
+    from src.stage5.storage import _assign_local_colors
+    positions = {"a":(0, 100), "b":(2, 100), "c":(100, 100),
+                 "d":(0, 0), "e":(3, 0), "f":(100, 0)}
+    edges = [{"source":"a", "target":"d", "edge_id":"one"},
+             {"source":"b", "target":"e", "edge_id":"two"},
+             {"source":"c", "target":"f", "edge_id":"three"}]
+    colors = _assign_local_colors(edges, positions, radius=12)
+    assert colors[0] != colors[1]
+    assert len(colors) == len(edges)
+    crowded = [{"source":f"s{i}", "target":f"t{i}", "edge_id":f"link{i}"}
+               for i in range(42)]
+    crowded_positions = {**{f"s{i}":(i*0.01,100) for i in range(42)},
+                         **{f"t{i}":(i*0.01,0) for i in range(42)}}
+    assert len(set(_assign_local_colors(crowded,crowded_positions,radius=12))) == 42
+
+
+def test_edge_type_overview_has_one_fixed_color_per_relation():
+    from src.stage5.events import EVENT_RELATIONS
+    from src.stage5.storage import EDGE_TYPE_COLORS
+    assert EVENT_RELATIONS <= EDGE_TYPE_COLORS.keys()
+    assert {"adjacent", "correspondence", "split", "merge"} <= EDGE_TYPE_COLORS.keys()
+    assert len(set(EDGE_TYPE_COLORS.values())) == len(EDGE_TYPE_COLORS)
+
+
+def test_public_outcome_palette_distinguishes_class_and_action():
+    from src.stage5.storage import _outcome_color
+    relations = ["building_constructed","building_demolished","building_unchanged",
+                 "tree_cover_gained","tree_cover_grew","tree_cover_lost",
+                 "tree_cover_shrank","tree_cover_unchanged"]
+    assert len({_outcome_color(relation) for relation in relations}) == len(relations)
+
+
+def test_guided_png_registration_recovers_cross_sensor_shift(tmp_path):
+    """A coarse geographic prior plus distributed landmarks must recover drift."""
+    import cv2
+    from rasterio.transform import from_origin
+    from src.stage5.registration import staged_tile_control_points
+
+    rng = np.random.default_rng(17)
+    base = rng.integers(25, 210, (384, 384), dtype=np.uint8)
+    base = cv2.GaussianBlur(base, (5, 5), 0)
+    for _ in range(90):
+        x, y = rng.integers(15, 369, 2)
+        cv2.circle(base, (int(x), int(y)), int(rng.integers(2, 11)),
+                   int(rng.integers(20, 240)), -1)
+    moving = cv2.warpAffine(base, np.float32([[1, 0, -17], [0, 1, -21]]),
+                            (384, 384), borderMode=cv2.BORDER_REFLECT)
+    moving = cv2.convertScaleAbs(moving, alpha=0.82, beta=32)
+    ref_path, moving_path = tmp_path/"reference.png", tmp_path/"moving.png"
+    cv2.imwrite(str(ref_path), base)
+    cv2.imwrite(str(moving_path), moving)
+    affine = from_origin(500000, 3700000, 1.5, 1.5)
+    points, reference, diagnostics = staged_tile_control_points(
+        moving_path, affine, "EPSG:32636", ref_path, affine, "EPSG:32636",
+        "EPSG:32636")
+    fit = fit_registration(points, reference, max_residual_m=4)
+    matrix = np.asarray(fit["affine"]).reshape(2, 3)
+    assert diagnostics["method"] == "phase_guided_sift_ransac"
+    assert diagnostics["inlier_count"] >= 20
+    center = np.array([500288, 3699712.0])
+    corrected = matrix[:, :2] @ center + matrix[:, 2]
+    assert np.allclose(corrected-center, [25.5, -31.5], atol=3.5)
+
+
 def graph(rectangles, *, origin=0, classes=None, year=2005, crs="EPSG:32636"):
     nodes = []
     for index, bounds in enumerate(rectangles):
@@ -97,6 +171,16 @@ class TemporalGraphTests(unittest.TestCase):
         self.assertEqual([e["relation"] for e in result["temporal_edges"]], ["split", "split"])
         self.assertEqual(len({n["track_id"] for n in result["nodes"]}), 3)
         self.assertEqual({e["relation"] for e in build(b, a)["temporal_edges"]}, {"merge"})
+
+    def test_distant_objects_are_not_merged_by_one_broad_later_region(self):
+        a = graph([(0,0,10,10),(100,0,110,10)], classes=[5,5])
+        b = graph([(0,0,110,10)], classes=[5], year=2015)
+        result = build(a,b)
+        self.assertEqual(result["temporal_edges"],[])
+        self.assertEqual(result["graph"]["matching_refinement"][0]["rejected_by_reason"],
+                         {"distant_lineage_siblings":2})
+        self.assertEqual({c["reason"] for c in result["comparisons"][0]["candidates"]},
+                         {"distant_lineage_siblings"})
 
     def test_nonoverlapping_coverage_is_not_disappearance(self):
         result = build(graph([(0, 0, 10, 10)]), graph([(100, 0, 110, 10)], year=2015))
@@ -248,8 +332,12 @@ class TemporalGraphTests(unittest.TestCase):
             result = build(graph([(0,0,10,10)]), graph([(0,0,10,10)],year=2015), output_directory=directory)
             loaded = load_stage5_result(directory)
             self.assertEqual(loaded["graph"], result["graph"])
+            self.assertTrue((Path(directory)/"outcome_graph.png").is_file())
+            self.assertEqual([e["relation"] for e in loaded["semantic_temporal_edges"]],
+                             ["rangeland_unchanged"])
             with np.load(Path(directory)/"graph_arrays.npz", allow_pickle=False) as arrays:
                 self.assertEqual(arrays["temporal_edge_index"].shape, (2,1))
+                self.assertEqual(arrays["semantic_edge_index"].shape, (2,1))
                 self.assertLess(arrays["years"][arrays["temporal_edge_index"][0,0]], arrays["years"][arrays["temporal_edge_index"][1,0]])
             (Path(directory)/"graph.json").write_text("{}")
             with self.assertRaisesRegex(RuntimeError, "changed"):

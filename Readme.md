@@ -427,9 +427,14 @@ two multi-tile annual outputs, add `--tile tile_00000.png`:
 
 Both comparison commands render the earlier imagery above the later imagery
 in the same mapped horizontal frame. Small node markers and matched-region
-links remain on the images; dense class-change links are drawn in the gap.
-The complete change edges, including unknown-class transitions, remain in the
-saved graph and GeoJSON.
+links run fully between the two images. `all_edge_types.png` uses one color per
+class-specific outcome with a legend; `outcome_graph.png` gives nearby links
+different colors, and `change_<class_outcome>.png` isolates each detected
+physical event type. The raw correspondence, split, merge, and same-year
+adjacency records remain in the graph but are not shown as temporal outcomes. Weak or
+distant links are screened using world-coordinate overlap and local changed
+area. Unknown and unchanged observations do not create change edges; the
+rejection counts are in `report.json`.
 
 The third command reads the two completed annual `run.json` files and their
 checksummed Stage 4 graphs. It saves `01_temporal_graph/graph.json`,
@@ -450,6 +455,6 @@ output folder; completed comparisons are kept immutable. The comparison checks
 that the annual graphs contain the recorded tiles and have common observed
 coverage after registration. `folder compare` accepts `--register-images`
 instead of `--registration-json` for other datasets when automatic image matching
-has enough reliable correspondences; that option also checks that the source
-GeoTIFFs have not changed since the annual runs. With `--project-root`, relative
+has enough reliable correspondences using the saved PNGs and georeference; the
+original source GeoTIFFs need not still be present. With `--project-root`, relative
 config paths are resolved from that project root.

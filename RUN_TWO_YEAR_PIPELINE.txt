@@ -59,7 +59,9 @@ original georeferenced image; they cannot be inferred reliably from filenames.
 The example registration JSON aligns the two years. For other georeferenced
 yearly inputs without measured registration control points, replace
 --registration-json '...' with --register-images to estimate alignment from
-the source images. Do not pass both options. Both yearly graphs must have a
+geographically overlapping saved tile PNGs. The original GeoTIFF may be absent
+from a copied annual output; the saved PNGs and georeference remain necessary.
+Do not pass both options. Both yearly graphs must have a
 real georeference and a projected metric target CRS; PNG-only local-pixel runs
 cannot be used with this temporal comparison command.
 
@@ -67,6 +69,12 @@ Inspect:
 
 artifacts/spatiotemporal_2017_2023/run.json
 artifacts/spatiotemporal_2017_2023/01_temporal_graph/temporal_graph.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/all_edge_types.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/outcome_graph.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/matching_graph.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/temporal_links.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/change_graph.png
+artifacts/spatiotemporal_2017_2023/01_temporal_graph/preview_index.json
 artifacts/spatiotemporal_2017_2023/01_temporal_graph/graph.json
 artifacts/spatiotemporal_2017_2023/01_temporal_graph/changes.geojson
 artifacts/spatiotemporal_2017_2023/01_temporal_graph/report.json
@@ -94,10 +102,29 @@ If both output folders contain a full annual run, select one saved PNG:
 This uses the completed graphs and saved tile PNGs; it does not rerun
 segmentation or refinement. The selected annual graph is clipped to the
 one tile window. A real source georeference is required in both outputs.
-The preview places the earlier satellite image above the later one at
-their mapped positions, with small nodes and blue matched-region links.
-Class-specific known-land-cover change links are colored in the gap so the
-imagery stays readable. Unknown-class transitions are omitted from the PNG
-preview; every edge remains in graph.json and changes.geojson.
+The command automatically aligns the two saved PNGs using a coarse image
+shift and geographically guided SIFT landmarks, then matches the graph nodes
+in the corrected metric coordinate frame. If the alignment lacks distributed
+landmark support, it stops instead of guessing. For surveyed control points,
+pass --registration-json instead. temporal_graph.png shows the whole graph
+over the two stacked satellite images with full node-to-node edges.
+all_edge_types.png shows only class-specific cross-year outcomes, such as
+Building Constructed, Road Removed, Water Lost, and Tree Cover Unchanged. One
+color is used per outcome type, with the class and action named in the legend.
+outcome_graph.png shows the same links with nearby edges assigned different
+colors and visible same-color endpoint markers. matching_graph.png and
+temporal_links.png are compatibility copies of outcome_graph.png.
+change_graph.png shows only detected class-specific changes;
+change_building_constructed.png, change_water_lost.png, etc. each show one
+observed outcome type. The exact list is in preview_index.json and
+change_type_images in run.json. Same-year adjacency, raw correspondence,
+split, and merge links are kept in graph.json for analysis but are absent
+from these public temporal views. Unknown labels never produce physical change
+edges. report.json records rejected distant/weak links. See
+docs/stage5-spatiotemporal-graph.md for the rules and their limitations.
+In graph.json, use semantic_temporal_edges for the class-specific temporal
+graph. Each edge stores its class_name and relation and at most one edge is
+published for each old/new node pair. Spatial_edges, temporal_edges, and
+change_edges retain the underlying adjacency/matching/change evidence.
 
 Use a new output folder when changing an input, year, or configuration.

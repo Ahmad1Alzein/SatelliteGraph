@@ -16,6 +16,32 @@ from src.cli import parser
 from src.config import DEFAULT_CONFIG, load_config
 
 
+def test_annual_tile_registration_uses_geographic_overlap_not_filename(tmp_path):
+    from src.folder_pipeline import _staged_year_registration
+    rng = np.random.default_rng(9)
+    base = cv2.GaussianBlur(rng.integers(0, 255, (320, 320), dtype=np.uint8), (5, 5), 0)
+    for _ in range(100):
+        x, y = rng.integers(15, 305, 2)
+        cv2.circle(base, (int(x), int(y)), int(rng.integers(2, 8)),
+                   int(rng.integers(30, 240)), -1)
+    shifted = cv2.warpAffine(base, np.float32([[1, 0, -12], [0, 1, -15]]),
+                             (320, 320), borderMode=cv2.BORDER_REFLECT)
+    reference_path, moving_path = tmp_path/"earlier.png", tmp_path/"later.png"
+    cv2.imwrite(str(reference_path), base[:256, :256])
+    cv2.imwrite(str(moving_path), shifted[:256, 16:272])
+    graph = {"source_affine_transform":list(from_origin(500000, 3700000, 1.5, 1.5))[:6],
+             "crs":"EPSG:32636"}
+    reference = {"preview_tiles":[{"path":str(reference_path), "tile_name":"a.png",
+                                   "x0":0, "y0":0, "width":256, "height":256}]}
+    moving = {"preview_tiles":[{"path":str(moving_path), "tile_name":"different.png",
+                                "x0":16, "y0":0, "width":256, "height":256}]}
+    controls, audit = _staged_year_registration(reference, moving, graph, graph, "EPSG:32636")
+    assert audit["registered_tile_pairs"] == 1
+    assert audit["tile_pairs"][0]["reference_tile"] == "a.png"
+    assert audit["tile_pairs"][0]["moving_tile"] == "different.png"
+    assert len(controls["moving_xy"]) >= 12
+
+
 class FolderPipelineTests(unittest.TestCase):
     def test_cli_accepts_folder_and_two_completed_results(self):
         annual = parser().parse_args(["folder", "run", "--folder", "tiles17_23/2017",
@@ -338,6 +364,12 @@ class FolderPipelineTests(unittest.TestCase):
             self.assertEqual(single["status"], "complete")
             self.assertEqual(single["tile_name"], "tile_00000.png")
             self.assertTrue(Path(single["temporal_graph_image"]).is_file())
+            self.assertTrue(Path(single["all_edge_types_image"]).is_file())
+            self.assertTrue(Path(single["matching_graph_image"]).is_file())
+            self.assertTrue(Path(single["temporal_links_image"]).is_file())
+            self.assertTrue(Path(single["change_graph_image"]).is_file())
+            self.assertTrue(all(Path(value).is_file() for value in single["change_type_images"].values()))
+            self.assertEqual(single["registration_method"], "identical_staged_png")
             self.assertTrue((root/"single_image_comparison/inputs/year_2017/graph.json").is_file())
             self.assertTrue((root/"single_image_comparison/inputs/year_2023/graph.json").is_file())
 

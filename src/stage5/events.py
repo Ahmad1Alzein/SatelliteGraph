@@ -105,6 +105,16 @@ def _area_intersection(first, second):
     return _polygonal_area(first.intersection(second))
 
 
+def _event_id(class_id, relation, source_year, target_year, source_nodes,
+              target_nodes, class_source_nodes, class_target_nodes, geometry):
+    """Identify the actual change component, not just its shared edge support."""
+    return "change-event::" + stable_digest([
+        source_year, target_year, class_id, relation,
+        sorted(source_nodes), sorted(target_nodes),
+        sorted(class_source_nodes), sorted(class_target_nodes),
+        geometry.wkb_hex])[:24]
+
+
 def detect_change_events(earlier, later, polygons_a, polygons_b, policy, *, show_progress=False):
     from tqdm import tqdm
     footprint_a,footprint_b = unary_union(polygons_a),unary_union(polygons_b)
@@ -138,9 +148,11 @@ def detect_change_events(earlier, later, polygons_a, polygons_b, policy, *, show
                 support.append((i,j,intersection.area,changed_area))
         if not support:
             return
-        event_id = "change-event::"+stable_digest([class_id,relation,
-            sorted(earlier[i]["node_id"] for i,_,_,_ in support),
-            sorted(later[j]["node_id"] for _,j,_,_ in support)])[:24]
+        event_id = _event_id(class_id, relation, earlier[0]["year"], later[0]["year"],
+            (earlier[i]["node_id"] for i,_,_,_ in support),
+            (later[j]["node_id"] for _,j,_,_ in support),
+            (earlier[i]["node_id"] for i in aa),
+            (later[j]["node_id"] for j in bb), geometry)
         event = {"event_id":event_id,"relation":relation,"class_id":class_id,
             "class_name":FUSED_CLASS_NAMES[class_id],"source_year":earlier[0]["year"],
             "target_year":later[0]["year"],"status":status,

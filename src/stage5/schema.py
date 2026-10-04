@@ -52,6 +52,33 @@ def validate_temporal_graph(document):
                     incoming.add(in_key)
     if document["schema_version"] == SCHEMA_VERSION:
         _validate_changes(document,by_id)
+        if "semantic_temporal_edges" in document:
+            _validate_semantic_edges(document,by_id)
+
+
+def _validate_semantic_edges(document,by_id):
+    from .semantics import CLASS_PREFIX
+    edges = document["semantic_temporal_edges"]
+    if document["graph"].get("semantic_temporal_edge_count") != len(edges):
+        raise ValueError("Semantic temporal edge count disagrees")
+    matching_ids = {edge["edge_id"] for edge in document["temporal_edges"]}
+    change_ids = {event["event_id"] for event in document["change_events"]}
+    seen = set()
+    for edge in edges:
+        source,target = by_id.get(edge["source"]),by_id.get(edge["target"])
+        pair = (edge["source"],edge["target"])
+        if (source is None or target is None or source["year"] >= target["year"]
+                or not edge["directed"] or pair in seen):
+            raise ValueError("Semantic temporal edge endpoints disagree")
+        seen.add(pair)
+        class_id = edge["class_id"]
+        if (class_id not in CLASS_PREFIX
+                or not edge["relation"].startswith(CLASS_PREFIX[class_id]+"_")
+                or (edge["matching_edge_id"] is None and not edge["change_event_ids"])):
+            raise ValueError("Semantic temporal edge type or evidence disagrees")
+        if (edge["matching_edge_id"] is not None and edge["matching_edge_id"] not in matching_ids
+                or not set(edge["change_event_ids"]).issubset(change_ids)):
+            raise ValueError("Semantic temporal edge refers to missing evidence")
 
 
 def _validate_changes(document,by_id):

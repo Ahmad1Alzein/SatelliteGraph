@@ -327,6 +327,66 @@ def _staged_preview_tiles(folder, annual, source_image_id):
     return metadata, tiles
 
 
+def _tile_affine(graph, tile):
+    from rasterio.transform import Affine
+    return Affine(*graph["source_affine_transform"]) * Affine.translation(
+        int(tile["x0"]), int(tile["y0"]))
+
+
+def _staged_year_registration(reference, moving, reference_graph, moving_graph, target_crs):
+    """Gather geographically overlapping tile landmarks across two annual runs."""
+    from rasterio.warp import transform_bounds
+    from shapely.geometry import box
+    from src.stage5.registration import staged_tile_control_points
+
+    def bounds(tile, graph):
+        affine = _tile_affine(graph, tile)
+        corners = [affine * point for point in
+                   ((0, 0), (tile["width"], 0),
+                    (tile["width"], tile["height"]), (0, tile["height"]))]
+        xs, ys = zip(*corners)
+        values = (min(xs), min(ys), max(xs), max(ys))
+        if graph["crs"] != target_crs:
+            values = transform_bounds(graph["crs"], target_crs, *values)
+        return box(*values)
+
+    reference_tiles = reference["preview_tiles"]
+    moving_tiles = moving["preview_tiles"]
+    reference_boxes = [bounds(tile, reference_graph) for tile in reference_tiles]
+    moving_boxes = [bounds(tile, moving_graph) for tile in moving_tiles]
+    controls_moving, controls_reference, audits = [], [], []
+    failures = []
+    for moving_tile, moving_box in zip(moving_tiles, moving_boxes):
+        ranked = sorted(((moving_box.intersection(ref_box).area, index)
+                         for index, ref_box in enumerate(reference_boxes)), reverse=True)
+        if not ranked or ranked[0][0] < 0.35 * moving_box.area:
+            continue
+        reference_tile = reference_tiles[ranked[0][1]]
+        try:
+            source, target, audit = staged_tile_control_points(
+                moving_tile["path"], _tile_affine(moving_graph, moving_tile), moving_graph["crs"],
+                reference_tile["path"], _tile_affine(reference_graph, reference_tile), reference_graph["crs"],
+                target_crs)
+        except ValueError as exc:
+            failures.append({"moving_tile":moving_tile["tile_name"],
+                             "reference_tile":reference_tile["tile_name"], "error":str(exc)})
+            continue
+        controls_moving.extend(source.tolist())
+        controls_reference.extend(target.tolist())
+        audits.append({"moving_tile":moving_tile["tile_name"],
+                       "reference_tile":reference_tile["tile_name"], **audit})
+    if not audits:
+        raise ValueError("Saved yearly tiles could not be registered: no geographically overlapping "
+                         "tile pair had enough consistent visual landmarks")
+    registration = {"moving_xy":controls_moving, "reference_xy":controls_reference,
+                    "max_residual_m":4.0}
+    diagnostics = {"method":"staged_tile_phase_guided_sift_ransac",
+                   "registered_tile_pairs":len(audits), "control_point_count":len(controls_moving),
+                   "tile_pairs":audits, "failed_tile_pairs":failures,
+                   "accuracy_status":"in_sample_landmarks_not_independent_ground_truth"}
+    return registration, diagnostics
+
+
 def compare_folders(first, second, output, *, registration_json=None,
                     register_images=False, boundary_tolerance=None,
                     config=DEFAULT_CONFIG, project_root=".", show_progress=True):
@@ -336,6 +396,7 @@ def compare_folders(first, second, output, *, registration_json=None,
     root=Path(project_root).resolve()
     path=lambda value: (Path(value) if Path(value).is_absolute() else root/value).resolve()
     sources=[]
+    combined_graphs=[]
     run_inputs=[]
     from src.stage4 import load_stage4_result
     for folder in (first,second):
@@ -363,12 +424,13 @@ def compare_folders(first, second, output, *, registration_json=None,
         if register_images:
             image=Path(annual["source_raster"])
             expected=annual.get("input_sha256",{}).get(str(image))
-            if not expected or not image.is_file() or _digest(image)!=expected:
+            if image.is_file() and (not expected or _digest(image)!=expected):
                 raise ValueError(f"Annual source raster changed since graph creation: {image}")
         saved_metadata, preview_tiles = _staged_preview_tiles(folder, annual, combined.graph["source_image_id"])
         sources.append({"year":int(annual["year"]),"graph_directory":str(graph_dir),
                         "image_path":str(annual["source_raster"]),
                         "preview_tiles":list(preview_tiles.values())})
+        combined_graphs.append(combined.graph)
         run_inputs.extend((record,graph_dir/"manifest.json",graph_dir/"graph.json",
                            saved_metadata,*(Path(tile["path"]) for tile in preview_tiles.values())))
     if sources[0]["year"]>=sources[1]["year"]:
@@ -376,9 +438,13 @@ def compare_folders(first, second, output, *, registration_json=None,
     if registration_json:
         registration=json.loads(path(registration_json).read_text(encoding="utf-8"))
         sources[1]["registration"]=registration
-    elif register_images:
-        sources[1]["register_to_reference"]=True
     cfg=load_config(path(config)) if not isinstance(config,dict) else copy.deepcopy(config)
+    if register_images:
+        target_crs = cfg.get("stage5",{}).get("target_crs") or combined_graphs[0]["crs"]
+        registration, diagnostics = _staged_year_registration(
+            sources[0], sources[1], combined_graphs[0], combined_graphs[1], target_crs)
+        sources[1]["registration"] = registration
+        sources[1]["registration_diagnostics"] = diagnostics
     if boundary_tolerance is not None:
         cfg["stage5"]["changes"]["boundary_tolerance_m"]=boundary_tolerance
     output=path(output)
@@ -398,6 +464,8 @@ def compare_folders(first, second, output, *, registration_json=None,
         raise FileExistsError(f"Comparison output directory is not empty: {output}")
     output.mkdir(parents=True,exist_ok=True)
     atomic_json(output/"series.json",series)
+    if register_images:
+        atomic_json(output/"registration_diagnostics.json", diagnostics)
     state={"status":"running","years":[s["year"] for s in sources],"series":str(output/"series.json"),
            "input_sha256":signature,"started_at":now()}
     atomic_json(manifest,state)
@@ -414,6 +482,14 @@ def compare_folders(first, second, output, *, registration_json=None,
         state.update(status="complete",completed_at=now(),
                      graph_directory=str(output/"01_temporal_graph"),
                      temporal_graph_image=str(output/"01_temporal_graph"/"temporal_graph.png"),
+                     all_edge_types_image=str(output/"01_temporal_graph"/"all_edge_types.png"),
+                     outcome_graph_image=str(output/"01_temporal_graph"/"outcome_graph.png"),
+                     matching_graph_image=str(output/"01_temporal_graph"/"matching_graph.png"),
+                     temporal_links_image=str(output/"01_temporal_graph"/"temporal_links.png"),
+                     change_graph_image=str(output/"01_temporal_graph"/"change_graph.png"),
+                     change_type_images={relation:str(output/"01_temporal_graph"/f"change_{relation}.png")
+                                         for relation in sorted({edge["relation"] for edge in graph["semantic_temporal_edges"]
+                                                                 if not edge["relation"].endswith("_unchanged")})},
                      report_path=str(output/"01_temporal_graph"/"report.json"),
                      common_coverage_m2=graph["comparisons"][0]["common_coverage_m2"],
                      node_count=graph["graph"]["node_count"],
@@ -421,6 +497,9 @@ def compare_folders(first, second, output, *, registration_json=None,
                      temporal_edge_count=graph["graph"]["temporal_edge_count"],
                      change_edge_count=graph["graph"]["change_edge_count"],
                      change_event_count=graph["graph"]["change_event_count"])
+        if register_images:
+            state["registration_diagnostics"] = str(output/"registration_diagnostics.json")
+            state["registration_method"] = diagnostics["method"]
         atomic_json(manifest,state)
         return state
     except Exception as exc:
@@ -517,6 +596,23 @@ def compare_images(first, second, output, *, tile_name=None, registration_json=N
              "started_at":now()}
     atomic_json(manifest,state)
     try:
+        if not registration_json:
+            from rasterio.transform import Affine
+            from src.stage5.registration import staged_tile_control_points
+            reference, moving = prepared
+            def tile_affine(item):
+                tile = item["preview_tiles"][0]
+                return Affine(*item["document"]["graph"]["source_affine_transform"]) * \
+                    Affine.translation(int(tile["x0"]), int(tile["y0"]))
+            target_crs = cfg.get("stage5",{}).get("target_crs") or reference["document"]["graph"]["crs"]
+            moving_xy, reference_xy, diagnostics = staged_tile_control_points(
+                moving["preview_tiles"][0]["path"], tile_affine(moving), moving["document"]["graph"]["crs"],
+                reference["preview_tiles"][0]["path"], tile_affine(reference), reference["document"]["graph"]["crs"],
+                target_crs)
+            moving["registration"] = {"moving_xy":moving_xy.tolist(),
+                                      "reference_xy":reference_xy.tolist(), "max_residual_m":4.0}
+            moving["registration_diagnostics"] = diagnostics
+            atomic_json(output/"registration_diagnostics.json", diagnostics)
         for item in prepared:
             graph_path = output/"inputs"/f"year_{item['year']}"/"graph.json"
             atomic_json(graph_path,item["document"])
@@ -532,6 +628,14 @@ def compare_images(first, second, output, *, tile_name=None, registration_json=N
         state.update(status="complete",completed_at=now(),
                      graph_directory=str(output/"01_temporal_graph"),
                      temporal_graph_image=str(output/"01_temporal_graph"/"temporal_graph.png"),
+                     all_edge_types_image=str(output/"01_temporal_graph"/"all_edge_types.png"),
+                     outcome_graph_image=str(output/"01_temporal_graph"/"outcome_graph.png"),
+                     matching_graph_image=str(output/"01_temporal_graph"/"matching_graph.png"),
+                     temporal_links_image=str(output/"01_temporal_graph"/"temporal_links.png"),
+                     change_graph_image=str(output/"01_temporal_graph"/"change_graph.png"),
+                     change_type_images={relation:str(output/"01_temporal_graph"/f"change_{relation}.png")
+                                         for relation in sorted({edge["relation"] for edge in graph["semantic_temporal_edges"]
+                                                                 if not edge["relation"].endswith("_unchanged")})},
                      report_path=str(output/"01_temporal_graph"/"report.json"),
                      common_coverage_m2=graph["comparisons"][0]["common_coverage_m2"],
                      node_count=graph["graph"]["node_count"],
@@ -539,6 +643,9 @@ def compare_images(first, second, output, *, tile_name=None, registration_json=N
                      temporal_edge_count=graph["graph"]["temporal_edge_count"],
                      change_edge_count=graph["graph"]["change_edge_count"],
                      change_event_count=graph["graph"]["change_event_count"])
+        if not registration_json:
+            state["registration_diagnostics"] = str(output/"registration_diagnostics.json")
+            state["registration_method"] = diagnostics["method"]
         atomic_json(manifest,state)
         return state
     except Exception as exc:

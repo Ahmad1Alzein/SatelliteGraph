@@ -1,7 +1,7 @@
 """Tile selection from a completed annual combined graph."""
 from shapely.geometry import shape
 
-from test_stage5 import graph
+from tests.test_stage5 import graph
 from src.stage4.schema import validate_combined_graph
 from src.stage5.subset import clip_combined_graph_to_tile
 

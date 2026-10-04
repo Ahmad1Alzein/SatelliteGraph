@@ -247,7 +247,8 @@ def parser() -> argparse.ArgumentParser:
     folder_compare.add_argument("--output", required=True)
     registration = folder_compare.add_mutually_exclusive_group()
     registration.add_argument("--registration-json", default=None, help="Measured cross-year control points JSON")
-    registration.add_argument("--register-images", action="store_true", help="Estimate control points with image matching")
+    registration.add_argument("--register-images", action="store_true",
+                              help="Align geographically overlapping saved PNG tiles with guided image matching")
     folder_compare.add_argument("--boundary-tolerance", type=float, default=None,
                                 help="Ignore change within this spatial distance in metres")
     folder_compare.add_argument("--config", default=str(DEFAULT_CONFIG))

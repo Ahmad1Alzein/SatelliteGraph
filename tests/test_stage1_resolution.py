@@ -156,7 +156,7 @@ class ResolutionTilingTests(unittest.TestCase):
             self.assertEqual(image[1,1,3],0)
 
     def test_old_array_tiling_api_still_works(self):
-        import test_stage1
+        import tests.test_stage1 as test_stage1
         with tempfile.TemporaryDirectory() as temp:
             test_stage1.test_stage1_loads_and_tiles_a_tiny_geotiff_in_tmp_path(Path(temp))
         test_stage1.test_stage1_constants_come_from_the_unified_root_config()

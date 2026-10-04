@@ -177,32 +177,50 @@ Persistent unchanged regions still receive temporal correspondence edges.
 
 ## Class-specific change edges (schema v2)
 
-The graph now contains two forward temporal edge collections:
+The graph contains three forward temporal edge collections:
 
 - `temporal_edges`: correspondence, split, and merge relationships.
 - `change_edges`: explicit events, each referring to one `change_events` record.
+- `semantic_temporal_edges`: the public class-specific outcome layer, with at
+  most one edge per old/new node pair. Examples are `building_constructed`,
+  `building_demolished`, `road_removed`, `water_lost`, and
+  `tree_cover_unchanged`.
+
+The public PNGs render `semantic_temporal_edges` only. Same-year adjacency and
+raw matcher lineage are retained in `graph.json` for audit, but are not shown
+as cross-year outcome types. Every semantic edge includes `class_id`,
+`class_name`, `relation`, `status`, the supporting change-event IDs, and the
+matching-edge ID when present. If a pair supports both an old-class loss and a
+new-class gain, the public layer selects the more specific class outcome (for
+example, bareland to building becomes `building_constructed`); both source
+events remain in `change_events`. A same-class matched pair is labeled
+`<class>_unchanged` only if overlap IoU is at least 0.5 and area differs by at
+most 10%, with no detected physical change event. Unknown, weakly supported,
+and ambiguous pairs are omitted rather than given a misleading label. These
+are candidate mapped outcomes, not confirmed physical causes.
 
 Each event carries a `class_id`, `class_name`, `relation`, geographic geometry,
 before/after node IDs, measurements, evidence, and status. The same endpoint
 pair can support multiple events: agriculture disappearing and a building being
 constructed are different class interpretations of the same changed ground.
 `change_event_count` counts events, `change_edge_count` counts supporting links,
-and `all_temporal_edge_count` adds correspondence and change links. Existing v1
+`all_temporal_edge_count` adds raw correspondence and change links, and
+`semantic_temporal_edge_count` counts the public one-per-pair outcomes. Existing v1
 graphs remain loadable; new exports use `satellitegraph.stage5.spatiotemporal-graph.v2`.
 
 ### Vocabulary for all nine classes
 
 | ID / class | Entire region appears | Entire region disappears | Continuing extent |
 |---|---|---|---|
-| 0 bareland | `appeared` | `disappeared` | `expanded`, `contracted`, `reconfigured`, `persisted` |
-| 1 rangeland | `appeared` | `disappeared` | same four extent relations |
-| 2 developed space | `appeared` | `disappeared` | same four extent relations |
-| 3 road | `constructed` | `removed` | same four extent relations |
-| 4 tree | `appeared` | `disappeared` | same four extent relations |
-| 5 water | `appeared` | `disappeared` | same four extent relations |
-| 6 agriculture land | `appeared` | `disappeared` | same four extent relations |
-| 7 buildings | `constructed` | `demolished` | same four extent relations |
-| 8 unknown | known to unknown: `became_unknown` | unknown to known: `identified` | unknown to unknown: `unknown_persisted` |
+| 0 bareland | `appeared` | `disappeared` | `expanded`, `contracted`, `reconfigured` |
+| 1 rangeland | `appeared` | `disappeared` | same three extent relations |
+| 2 developed space | `appeared` | `disappeared` | same three extent relations |
+| 3 road | `constructed` | `removed` | same three extent relations |
+| 4 tree | `appeared` | `disappeared` | same three extent relations |
+| 5 water | `appeared` | `disappeared` | same three extent relations |
+| 6 agriculture land | `appeared` | `disappeared` | same three extent relations |
+| 7 buildings | `constructed` | `demolished` | same three extent relations |
+| 8 unknown | no physical event | no physical event | no change edge |
 
 Names describe mapped observations. New tree cover does not prove planting;
 tree loss does not establish logging. Agriculture transitions do not establish
@@ -229,11 +247,11 @@ class-group member must also have semantic confidence >= 0.60. Missing/non-finit
 confidence cannot establish a physical event. Classifier scores themselves are
 not calibrated physical-change probabilities.
 
-Unknown transitions produce observability events, never construction or
-demolition. A building replaced partly by unknown pixels may therefore remain
-`insufficient_semantic_evidence`; this is deliberate abstention. Events over
-unknown intersections report the observed intersection only, not whole-object
-appearance or disappearance. Clouds mislabeled as confident known classes remain
+Unknown transitions do not produce change events or change edges. They remain
+visible as class-8 yearly nodes and may have uncertain correspondence links.
+A building replaced partly by unknown pixels may therefore remain
+`insufficient_semantic_evidence`; this is deliberate abstention. Clouds
+mislabeled as confident known classes remain
 an upstream limitation; this module cannot infer an unavailable cloud mask.
 
 If a small uncertain portion is tolerated by `minimum_known_fraction`, physical
@@ -248,8 +266,8 @@ event on 960 m²; the unknown 40 m² never receives a demolition edge. Set
 
 For each known class, connect overlapping same-class observations across years
 and compare the **unions** in each connected group. A pure one-to-two segmentation
-split or two-to-one merge has unchanged union area, so it produces `persisted`
-extent alongside its structural split/merge links. This does not establish
+split or two-to-one merge has unchanged union area, so it produces no physical
+change edge; a valid local split/merge may still have structural links. This does not establish
 individual physical-object identity inside the group.
 
 Let A and B be those unions clipped to common observed ground:
@@ -278,8 +296,8 @@ is not a universal accuracy guarantee.
   `contracted`.
 - If both are significant, supported net gain/loss determines expansion or
   contraction; a net difference below threshold produces `reconfigured`.
-- Otherwise the continuing class group is `persisted`, meaning no detected
-  **extent** change above tolerance, not proof that nothing happened physically.
+- Otherwise the continuing class group has no change edge. Its assessment still
+  records `persisted`, meaning no detected **extent** change above tolerance.
 
 This preserves equal-area relocation/reconfiguration: a water region can lose
 50 m² on one side and gain 50 m² on another despite net change being zero.
@@ -293,8 +311,8 @@ independent observations, not automatic legal/physical conclusions.
 
 ### Count events once
 
-One grouped event may have several supporting edges, including continuation
-links and links from/to changed background regions. **Aggregate areas by unique
+One grouped event may have several local supporting edges, but at most one per
+changed-class node. **Aggregate areas by unique
 `event_id`, not by summing the same event once per edge.**
 An edge's `change_support_area_m2` records the portion of that event geometry in
 its before/after overlap. Cross-class transitions contribute both a loss event
@@ -303,6 +321,38 @@ also double-counts changed land intentionally; union geometries for unique land 
 
 The `stage5.changes` section in `config.yaml` controls these thresholds. Python
 callers can pass a `ChangePolicy` or a dictionary through `change_policy`.
+
+### Local edge refinement
+
+Stage 5 tests each raw physical change witness against the event's actual
+changed polygon in projected metres. The overlap must contain at least
+`max(1 m², 0.25 * minimum_area_m2)`, at least 5% of the smaller endpoint,
+and at least 8% of that endpoint pair's overlap. A 1 m inward buffer by default
+must leave a spatial core; this rejects narrow registration slivers. For tree
+and building nodes, support must also lie within
+`max(20 m, 2 * sqrt(class_node_area_m2))` of the class object's representative
+point. When several old nodes point to one newly observed object (or the reverse
+for loss), the edge with the greatest local support wins; ties prefer the nearer
+support. Rejected candidates are omitted from `change_edges`, and rejection
+counts are recorded in `graph.change_refinement` and `report.json`. These
+numbers are **engineering thresholds**, not values validated by the cited papers.
+Legitimate multi-source conversions may be omitted; use `changes.geojson` and
+the yearly masks when the full changed footprint matters.
+
+Structural split/merge links receive a separate check: all members must retain
+one known class, and their sibling polygons must form a connected group within
+`matching_policy.search_radius_m` (5 m by default). A broad polygon spanning
+distant objects is left unresolved, rather than asserting a false merge. The
+rejected link counts and candidate reasons are stored in
+`graph.matching_refinement` and `comparisons[].candidates`.
+
+These rules follow the **object-level** emphasis on geometry, spatial context,
+and registration uncertainty in [Chen et al. (2014)](https://www.sciencedirect.com/science/article/pii/S0924271613002293),
+[Yu et al. (2016)](https://www.sciencedirect.com/science/article/pii/S003442571630058X), and
+[He et al. (2021)](https://www.mdpi.com/2072-4292/13/18/3660). Object-level
+footprint change should not be interpreted as verified construction or
+demolition from two RGB images alone; different view angles, seasonality,
+segmentation, and georegistration can still cause false detections.
 
 ## Run
 
@@ -340,11 +390,15 @@ Artifacts under `artifacts/stage5/<name>/01_temporal_graph/`:
 | File | Meaning |
 |---|---|
 | `graph.json` | All yearly observations, world polygons, spatial/temporal edges, registration metadata, candidates and provenance |
-| `graph_arrays.npz` | Pickle-free IDs, tracks, years, class IDs, world positions/areas, spatial and temporal edge indices and temporal scores/relations |
+| `graph_arrays.npz` | Pickle-free IDs, tracks, years, class IDs, world positions/areas, spatial, raw temporal, change, and semantic outcome edge arrays |
 | `nodes.geojson` | WGS84 longitude/latitude geometries for GIS |
 | `changes.geojson` | WGS84 event geometries with class, relation, area measurements and candidate status |
-| `report.json` | Counts, matching states and registration limitations |
-| `temporal_graph.png` | Spatial yearly panels with correspondence lines and colored gain/loss/extent/observability event links |
+| `report.json` | Counts, matching/change-refinement audits, and registration limitations |
+| `temporal_graph.png` | Spatial yearly panels with correspondence lines and physical change links |
+| `all_edge_types.png` | Class-specific cross-year outcomes, one fixed color per type, with a class/action legend |
+| `outcome_graph.png` | The same outcomes with locally distinct link colors and matching endpoint markers |
+| `matching_graph.png`, `temporal_links.png` | Compatibility copies of `outcome_graph.png` |
+| `change_graph.png`, `change_<class_outcome>.png` | Detected class-specific change outcomes together and separately |
 | `manifest.json` | Complete-status gate and artifact checksums |
 
 The JSON contains each undirected spatial edge once; numeric arrays contain

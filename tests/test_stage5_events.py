@@ -5,11 +5,12 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-from shapely.geometry import box
+from shapely.geometry import box, mapping
 
-from test_stage5 import graph, build
+from tests.test_stage5 import graph, build
 from src.stage5 import build_temporal_graph, load_stage5_result
 from src.stage5.events import ChangePolicy, CLASS_EVENTS, detect_change_events
+from src.stage5.refinement import refine_change_events
 
 
 POLICY = {"boundary_tolerance_m":0.0, "minimum_area_m2":1.0, "minimum_relative_change":0.05}
@@ -24,6 +25,28 @@ def kinds(result, class_id):
 
 
 class ChangeEventTests(unittest.TestCase):
+    def test_refinement_keeps_dominant_local_witness_for_one_new_object(self):
+        old_near,old_far,new = box(0,0,10,10),box(40,0,45,10),box(0,0,50,10)
+        earlier = [{"node_id":name,"segment_type":{"id":0},"geometry_world":mapping(geometry)}
+                   for name,geometry in (("old-near",old_near),("old-far",old_far))]
+        later = [{"node_id":"new-building","segment_type":{"id":7},
+                  "geometry_world":mapping(new)}]
+        event = {"event_id":"construction-1","class_id":7,"relation":"constructed",
+                 "geometry_world":mapping(old_near.union(old_far)),"evidence":{},
+                 "source_node_ids":["old-near","old-far"],
+                 "target_node_ids":["new-building"]}
+        edges = [{"event_id":"construction-1","edge_id":f"witness-{name}",
+                  "source":name,"target":"new-building","overlap_area_m2":geometry.area,
+                  "change_support_area_m2":geometry.area}
+                 for name,geometry in (("old-near",old_near),("old-far",old_far))]
+        refined = refine_change_events({"events":[event],"edges":edges,"assessments":[]},
+                                       earlier,later,
+                                       ChangePolicy(minimum_area_m2=1,boundary_tolerance_m=0))
+        self.assertEqual([(edge["source"],edge["target"]) for edge in refined["edges"]],
+                         [("old-near","new-building")])
+        self.assertEqual(refined["audit"]["removed_edges_by_reason"],
+                         {"weaker_competing_witness":1})
+
     def test_appearance_with_mixed_dimension_coverage_does_not_crash(self):
         earlier_polygons = [box(0, 0, 2, 2), box(4, 0, 5, 1)]
         later_polygons = [box(1, 0, 2, 2), box(3, 0, 4, 1)]
@@ -66,6 +89,26 @@ class ChangeEventTests(unittest.TestCase):
         self.assertFalse(any(e["target"]==building["node_id"] for e in result["temporal_edges"]))
         self.assertTrue(any(e["target"]==building["node_id"] and e["relation"]=="constructed"
                             for e in result["change_edges"]))
+        self.assertTrue(any(e["target"]==building["node_id"] and
+                            e["relation"]=="building_constructed"
+                            for e in result["semantic_temporal_edges"]))
+
+    def test_public_outcomes_are_class_specific_and_one_per_pair(self):
+        result = events(graph([(0,0,10,10)],classes=[0]),
+                        graph([(0,0,10,10)],classes=[7],year=2015))
+        outcomes = result["semantic_temporal_edges"]
+        self.assertEqual(len(outcomes),1)
+        self.assertEqual(outcomes[0]["relation"],"building_constructed")
+        self.assertEqual(outcomes[0]["class_name"],"buildings")
+        self.assertEqual(len(outcomes[0]["change_event_ids"]),2)
+        reverse = events(graph([(0,0,10,10)],classes=[7]),
+                         graph([(0,0,10,10)],classes=[0],year=2015))
+        self.assertEqual([e["relation"] for e in reverse["semantic_temporal_edges"]],
+                         ["building_demolished"])
+        stable = events(graph([(0,0,10,10)],classes=[5]),
+                        graph([(0,0,10,10)],classes=[5],year=2015))
+        self.assertEqual([e["relation"] for e in stable["semantic_temporal_edges"]],
+                         ["water_unchanged"])
 
     def test_all_known_classes_expansion_and_contraction(self):
         for cid in range(8):
@@ -84,7 +127,7 @@ class ChangeEventTests(unittest.TestCase):
         a = graph([(0,0,10,10)],classes=[7])
         b = graph([(0,0,5,10),(5,0,10,10)],classes=[7,7],year=2015)
         result = events(a,b)
-        self.assertEqual(kinds(result,7),{"persisted"})
+        self.assertEqual(kinds(result,7),set())
         self.assertEqual({e["relation"] for e in result["temporal_edges"]},{"split"})
 
     def test_equal_net_area_with_gain_and_loss_is_reconfigured(self):
@@ -104,12 +147,12 @@ class ChangeEventTests(unittest.TestCase):
         self.assertIn("insufficient_coverage", {a["status"] for a in result["change_assessments"]})
 
     def test_unknown_transitions_are_not_construction_or_demolition(self):
-        for old,new,expected in [(8,7,"identified"),(7,8,"became_unknown"),(8,8,"unknown_persisted")]:
+        for old,new in [(8,7),(7,8),(8,8)]:
             result = events(graph([(0,0,10,10)],classes=[old]),
                             graph([(0,0,10,10)],classes=[new],year=2015))
             relations = {e["relation"] for e in result["change_edges"]}
-            self.assertIn(expected,relations)
-            self.assertFalse(relations & {"constructed","demolished","appeared","disappeared"})
+            self.assertFalse(relations)
+            self.assertEqual(result["change_events"],[])
 
     def test_low_confidence_cannot_establish_change(self):
         a = graph([(0,0,10,10)],classes=[0])
@@ -121,7 +164,7 @@ class ChangeEventTests(unittest.TestCase):
         a = graph([(0,0,10,10),(10,0,20,10)],classes=[7,0])
         b = graph([(0,0,10.2,10),(10.2,0,20,10)],classes=[7,0],year=2015)
         result = events(a,b,boundary_tolerance_m=0.5)
-        self.assertEqual(kinds(result,7),{"persisted"})
+        self.assertEqual(kinds(result,7),set())
 
     def test_change_event_exports_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -148,10 +191,9 @@ class ChangeEventTests(unittest.TestCase):
                     result = events(graph([(0,0,10,10)],classes=[old]),
                                     graph([(0,0,10,10)],classes=[new],year=2015))
                     if old==8 or new==8:
-                        expected = "unknown_persisted" if old==new else "identified" if old==8 else "became_unknown"
-                        self.assertEqual({e["relation"] for e in result["change_events"]},{expected})
+                        self.assertEqual(result["change_events"],[])
                     elif old==new:
-                        self.assertEqual(kinds(result,old),{"persisted"})
+                        self.assertEqual(kinds(result,old),set())
                     else:
                         self.assertEqual(kinds(result,old),{CLASS_EVENTS[old]["disappeared"]})
                         self.assertEqual(kinds(result,new),{CLASS_EVENTS[new]["appeared"]})
@@ -159,7 +201,7 @@ class ChangeEventTests(unittest.TestCase):
     def test_pure_merge_does_not_infer_expansion(self):
         result = events(graph([(0,0,5,10),(5,0,10,10)],classes=[5,5]),
                         graph([(0,0,10,10)],classes=[5],year=2015))
-        self.assertEqual(kinds(result,5),{"persisted"})
+        self.assertEqual(kinds(result,5),set())
 
     def test_outside_coverage_does_not_infer_construction(self):
         result = events(graph([(0,0,10,10)],classes=[0]),
@@ -171,7 +213,7 @@ class ChangeEventTests(unittest.TestCase):
         b = graph([(0,0,5,10),(5,0,10,10)],classes=[0,8],year=2015)
         result = events(a,b)
         self.assertNotIn("demolished",kinds(result,7))
-        self.assertIn("became_unknown",kinds(result,8))
+        self.assertFalse(kinds(result,8))
 
     def test_small_unknown_replacement_never_gets_demolition_edge(self):
         result = events(graph([(0,0,100,10)],classes=[7]),
