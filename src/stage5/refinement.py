@@ -170,6 +170,11 @@ def refine_change_events(changes, earlier, later, policy, spatial_edges=()):
                 vertices = list(rectangle.exterior.coords)
                 sides = [math.dist(vertices[index], vertices[index+1]) for index in range(4)]
                 elongation = max(sides)/max(min(sides), 1e-9)
+                if (elongation < 3.0 and
+                        (relation == "constructed" and source_class == 7 or
+                         relation == "removed" and target_class == 7)):
+                    removed_edges["compact_road_building_conflict"] += 1
+                    continue
                 if elongation < 3.0 and not (elongation >= 1.3 and
                                              road_neighbors[changed_id] >= 2):
                     removed_edges["compact_road_without_road_context"] += 1
@@ -227,6 +232,7 @@ def refine_change_events(changes, earlier, later, policy, spatial_edges=()):
                        "boundary_tolerance_m":policy.boundary_tolerance_m,
                        "compact_class_anchor_distance_m":"max(20, 2*sqrt(class_area_m2))",
                        "road_change":"elongation >= 3 or elongation >= 1.3 with >= 2 adjacent road nodes",
+                       "compact_road_building_conflict":"withhold direct building/road conversion when road elongation < 3",
                        "maximum_witnesses_per_changed_class_node":1},
              "interpretation":"filtered candidate map changes; physical causes need external validation"}
     return {"events":retained_events,"edges":retained_edges,

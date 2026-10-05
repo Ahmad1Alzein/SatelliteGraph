@@ -25,6 +25,35 @@ def test_change_event_identity_distinguishes_shared_support_components():
     assert len({first, second, third}) == 3
 
 
+def test_local_coordinate_consensus_recovers_unmatched_building_with_shape_change():
+    from shapely.ops import unary_union
+    from src.stage5.matching import match_snapshots, MatchPolicy
+
+    old = [box(0,0,20,20), box(30,0,40,10), box(30,15,40,25),
+           box(0,30,10,40), box(30,30,40,40)]
+    new = [box(5,2,20,15), box(31,0,41,10), box(31,15,41,25),
+           box(1,30,11,40), box(31,30,41,40)]
+    footprint = box(-5,-5,50,45)
+    old.append(footprint.difference(unary_union(old)))
+    new.append(footprint.difference(unary_union(new)))
+    first = {"nodes":[{"node_id":f"old-{i}","segment_type":{"id":7 if i<5 else 0}}
+                      for i in range(6)],"edges":[]}
+    second = {"nodes":[{"node_id":f"new-{i}","segment_type":{"id":7 if i<5 else 0}}
+                       for i in range(6)],"edges":[]}
+    result = match_snapshots(first, second, old, new, MatchPolicy())
+    rescued = next(link for link in result["links"] if link["i"] == 0)
+    assert rescued["j"] == 0
+    assert rescued["relation"] == "correspondence"
+    assert rescued["evidence"]["rescue_method"] == "local_coordinate_consensus"
+    assert rescued["evidence"]["score"] < 0.60
+    assert abs(rescued["evidence"]["predicted_shift_xy_m"][0] - 1.0) < 0.1
+
+
+class CoordinateRescueTests(unittest.TestCase):
+    def test_unmatched_building_with_shape_change(self):
+        test_local_coordinate_consensus_recovers_unmatched_building_with_shape_change()
+
+
 def test_nearby_temporal_links_receive_distinct_colors():
     from src.stage5.storage import _assign_local_colors
     positions = {"a":(0, 100), "b":(2, 100), "c":(100, 100),

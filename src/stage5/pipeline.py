@@ -165,6 +165,7 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
                                  show_progress=show_progress)
         matching_refinement.append({"source_year":ordered[index]["year"],
                                     "target_year":ordered[index+1]["year"],
+                                    "coordinate_rescue":result["coordinate_rescue"],
                                     **refine_matching_links(result, documents[index], documents[index+1],
                                                             all_polygons[index], all_polygons[index+1], policy)})
         earlier, later = nodes_by_year[index], nodes_by_year[index+1]
@@ -216,6 +217,7 @@ def build_temporal_graph(snapshots, *, target_crs=None, policy=None, change_poli
                                          target.to_wkt(), registrations,
                                          "local_object_change_witness_refinement_v1",
                                          "local_same_class_lineage_refinement_v1",
+                                         "local_coordinate_consensus_v1",
                                          "class_specific_outcome_edges_v1"]),
         "edge_model": "undirected_spatial_and_directed_forward_temporal",
         "primary_temporal_edge_collection":"semantic_temporal_edges",

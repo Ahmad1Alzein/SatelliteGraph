@@ -126,8 +126,10 @@ D = exp(-centroid_distance / max(search_radius, sqrt(min(area(A),area(B)))))
 A_sim = min(area(A),area(B)) / max(area(A),area(B))
 compactness(P) = 4*pi*area(P) / perimeter(P)^2
 H = min(compactness(A),compactness(B)) / max(compactness(A),compactness(B))
-N = 1 - 0.5 * L1(normalized_neighbor_class_histogram_A,
-                 normalized_neighbor_class_histogram_B)
+N_distribution = 1 - 0.5 * L1(normalized_neighbor_class_histogram_A,
+                              normalized_neighbor_class_histogram_B)
+N_cosine = cosine(neighbor_class_counts_A, neighbor_class_counts_B)
+N = 0.5 * (N_distribution + N_cosine)
 S = 0.55*I + 0.15*D + 0.10*A_sim + 0.10*H + 0.10*N
 ```
 
@@ -146,6 +148,18 @@ assignment with zero-benefit dummy unmatched choices. The conservative margin
 gate typically leaves singleton components; this is not a global quadratic
 graph-matching solver. The assignment uses SciPy's
 [modified Jonker–Volgenant implementation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linear_sum_assignment.html).
+
+After the main assignment, a conservative second pass uses already accepted,
+stable building pairs as local coordinate landmarks. It requires at least four
+such pairs globally and three within 125 m of a candidate. The local median
+residual offset must be at most 8 m and consistent among the landmarks. An
+unresolved **same-class** pair can then be rescued only if it has raw overlap,
+adjusted IoU at least 0.35, a plausible area ratio, a sufficiently small
+centroid residual, and a unique best rescue score. The offset is used to
+compare polygons; it does not alter their stored coordinates. The audit under
+`matching_refinement.coordinate_rescue` reports its anchor and recovery counts.
+Merged or extremely large building masks can remain unresolved when they lack
+a unique counterpart.
 
 All nearby candidate scores and rejection reasons are retained under
 `comparisons[].candidates`; accepted temporal edges retain their evidence. Scores
@@ -349,7 +363,7 @@ rejected link counts and candidate reasons are stored in
 These rules follow the **object-level** emphasis on geometry, spatial context,
 and registration uncertainty in [Chen et al. (2014)](https://www.sciencedirect.com/science/article/pii/S0924271613002293),
 [Yu et al. (2016)](https://www.sciencedirect.com/science/article/pii/S003442571630058X), and
-[He et al. (2021)](https://www.mdpi.com/2072-4292/13/18/3660). Object-level
+[Jung et al. (2021)](https://www.mdpi.com/2072-4292/13/18/3660). Object-level
 footprint change should not be interpreted as verified construction or
 demolition from two RGB images alone; different view angles, seasonality,
 segmentation, and georegistration can still cause false detections.
@@ -434,7 +448,7 @@ use a long observation history to characterize surface-water changes. That
 distinction motivates reporting two-date water gain/loss without claiming
 permanent change or seasonal history. Object-based detection also depends on
 segmentation and registration quality, as examined by
-[Lv et al. (2016)](https://www.mdpi.com/2072-4292/8/9/761).
+[Ma et al. (2016)](https://www.mdpi.com/2072-4292/8/9/761).
 
 | Primary reference | Relevant contribution | Use here |
 |---|---|---|
@@ -476,10 +490,13 @@ known-class expansion/contraction cases, changes without identity matches,
 segmentation-only splits/merges, partial/unknown coverage, low confidence,
 registration tolerance, equal-area gain/loss, and event export roundtrips.
 
-On the available real four-tile 2005 graph, 1,457 polygons convert to
-621,936.64 m², matching source pixel area at 0.8 m resolution. Only 2005 combined
-graphs were available during implementation, so no real cross-year matching
-accuracy is claimed. A second-year graph is required for that experiment.
+The available real four-tile 2005 graph has 1,457 polygons covering
+621,936.64 m², matching source pixel area at 0.8 m resolution. A separate
+2013/2023 annual-output comparison has now produced 8,096 nodes, 725 retained
+temporal links, 632 retained change edges, and 586 retained change events.
+Its local coordinate-consensus pass recovered 48 one-to-one links from 202
+stable building landmarks. These are output counts, **not accuracy measures**;
+independent reference annotations are still needed.
 
 Before reporting scientific change accuracy, label stable control points and
 region correspondences across independent locations/years. Measure held-out

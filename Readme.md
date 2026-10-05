@@ -14,6 +14,9 @@ and tile-local adjacency graphs. The current workflow is:
    edges between years. It also records class-specific appearance/disappearance,
    construction/removal, expansion/contraction, and classification-uncertainty
    events. See [Stage 5 spatiotemporal graphs](docs/stage5-spatiotemporal-graph.md).
+   For a professor-facing explanation of matching and every class-specific
+   change edge, see [Temporal edge methodology](docs/temporal-edge-methodology-for-review.md).
+   A thesis/article citation ledger is in [Research sources](docs/research-sources-for-thesis.md).
 
 Stage 2 runs two models in one pipeline:
 

@@ -78,6 +78,27 @@ class ChangeEventTests(unittest.TestCase):
         self.assertNotIn("road_grew",
                          {edge["relation"] for edge in result["semantic_temporal_edges"]})
 
+    def test_compact_building_to_road_transition_abstains_despite_road_neighbors(self):
+        earlier = [{"node_id":"old-building","segment_type":{"id":7},
+                    "geometry_world":mapping(box(0,0,10,4))}]
+        later = [{"node_id":"new-road","segment_type":{"id":3},
+                  "geometry_world":mapping(box(0,0,10,4))},
+                 {"node_id":"road-neighbor-a","segment_type":{"id":3},
+                  "geometry_world":mapping(box(-5,0,0,4))},
+                 {"node_id":"road-neighbor-b","segment_type":{"id":3},
+                  "geometry_world":mapping(box(10,0,15,4))}]
+        event = {"event_id":"candidate-road","class_id":3,"relation":"constructed",
+                 "geometry_world":mapping(box(0,0,10,4)),"evidence":{},
+                 "source_node_ids":["old-building"],"target_node_ids":["new-road"]}
+        edge = {"event_id":"candidate-road","edge_id":"road-witness",
+                "source":"old-building","target":"new-road","overlap_area_m2":40.0}
+        spatial = [{"source":"new-road","target":"road-neighbor-a"},
+                   {"source":"new-road","target":"road-neighbor-b"}]
+        result = refine_change_events({"events":[event],"edges":[edge],"assessments":[]},
+                                      earlier,later,ChangePolicy(minimum_area_m2=1,boundary_tolerance_m=0),
+                                      spatial)
+        self.assertEqual(result["edges"],[])
+
     def test_appearance_with_mixed_dimension_coverage_does_not_crash(self):
         earlier_polygons = [box(0, 0, 2, 2), box(4, 0, 5, 1)]
         later_polygons = [box(1, 0, 2, 2), box(3, 0, 4, 1)]

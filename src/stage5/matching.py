@@ -7,6 +7,8 @@ import math
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial import cKDTree
+from shapely.affinity import translate
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from tqdm import tqdm
@@ -77,6 +79,100 @@ def _components(pairs):
             stack.extend(adjacency[item] - group)
         seen |= group
         yield sorted(i for side, i in group if side == 0), sorted(i for side, i in group if side == 1)
+
+
+def _rescue_with_local_coordinate_consensus(first, second, visible_a, visible_b,
+                                            candidates, links, used_a, used_b):
+    """Recover conservative same-class matches using residual shifts of stable buildings.
+
+    The global image registration is already applied. This pass estimates only
+    a small local *residual* from existing high-overlap correspondences and does
+    not move stored node geometries or infer physical change from the offset.
+    """
+    anchors, shifts = [], []
+    for link in links:
+        if link["relation"] != "correspondence":
+            continue
+        i, j = link["i"], link["j"]
+        evidence = link["evidence"]
+        if (int(first["nodes"][i]["segment_type"]["id"]) != 7 or
+                int(second["nodes"][j]["segment_type"]["id"]) != 7 or
+                evidence["iou"] < 0.55 or evidence["score"] < 0.70 or
+                evidence["area_similarity"] < 0.60):
+            continue
+        a, b = visible_a[i].centroid, visible_b[j].centroid
+        displacement = np.asarray([b.x-a.x, b.y-a.y], dtype=float)
+        if np.linalg.norm(displacement) <= 10.0:
+            anchors.append([a.x, a.y])
+            shifts.append(displacement)
+    audit = {"method":"local_coordinate_consensus_v1", "stable_building_anchor_count":len(anchors),
+             "eligible_candidate_count":0, "recovered_link_count":0}
+    if len(anchors) < 4:
+        return audit
+    tree = cKDTree(np.asarray(anchors))
+    shifts = np.asarray(shifts)
+    eligible = []
+    for candidate in candidates:
+        i, j = candidate["i"], candidate["j"]
+        if i in used_a or j in used_b or candidate["iou"] < 0.15:
+            continue
+        class_a = int(first["nodes"][i]["segment_type"]["id"])
+        class_b = int(second["nodes"][j]["segment_type"]["id"])
+        if class_a != class_b or class_a == 8:
+            continue
+        if candidate["area_similarity"] < (0.35 if class_a == 7 else 0.45):
+            continue
+        a, b = visible_a[i], visible_b[j]
+        nearby = tree.query_ball_point([a.centroid.x, a.centroid.y], r=125.0)
+        if len(nearby) < 3:
+            continue
+        local_shifts = shifts[nearby]
+        predicted = np.median(local_shifts, axis=0)
+        if (np.linalg.norm(predicted) > 8.0 or
+                np.percentile(np.linalg.norm(local_shifts-predicted, axis=1), 75) > 5.0):
+            continue
+        shifted_b = translate(b, xoff=-predicted[0], yoff=-predicted[1])
+        overlap = a.intersection(shifted_b).area
+        adjusted_iou = overlap/(a.area+shifted_b.area-overlap)
+        if adjusted_iou < 0.35:
+            continue
+        residual = np.linalg.norm(np.asarray([b.centroid.x-a.centroid.x,
+                                              b.centroid.y-a.centroid.y])-predicted)
+        tolerance = max(4.0,0.35*math.sqrt(min(a.area,b.area)))
+        if residual > tolerance:
+            continue
+        rescue_score = (0.65*adjusted_iou + 0.20*candidate["area_similarity"] +
+                        0.15*math.exp(-residual/tolerance))
+        if rescue_score < 0.48:
+            continue
+        candidate.update(coordinate_rescue_score=float(rescue_score),
+                         adjusted_iou=float(adjusted_iou),
+                         predicted_shift_xy_m=predicted.tolist(),
+                         centroid_residual_m=float(residual),
+                         local_anchor_count=len(nearby))
+        eligible.append(candidate)
+    audit["eligible_candidate_count"] = len(eligible)
+    by_source, by_target = defaultdict(list), defaultdict(list)
+    for candidate in eligible:
+        by_source[candidate["i"]].append(candidate)
+        by_target[candidate["j"]].append(candidate)
+    for candidate in sorted(eligible,key=lambda c:(-c["coordinate_rescue_score"],c["i"],c["j"])):
+        i, j = candidate["i"], candidate["j"]
+        if i in used_a or j in used_b:
+            continue
+        score = candidate["coordinate_rescue_score"]
+        alternatives = [other["coordinate_rescue_score"] for other in
+                        by_source[i]+by_target[j] if other is not candidate]
+        if score-max(alternatives,default=0) < 0.05:
+            candidate["reason"] = "coordinate_rescue_ambiguous"
+            continue
+        candidate.update(accepted=True,reason="coordinate_rescue",
+                         rescue_method="local_coordinate_consensus")
+        links.append({"i":i,"j":j,"relation":"correspondence","evidence":candidate.copy()})
+        used_a.add(i)
+        used_b.add(j)
+        audit["recovered_link_count"] += 1
+    return audit
 
 
 def match_snapshots(first, second, polygons_a, polygons_b, policy, *, show_progress=False):
@@ -179,6 +275,8 @@ def match_snapshots(first, second, polygons_a, polygons_b, policy, *, show_progr
             links.append({"i": i, "j": j, "relation": "correspondence", "evidence": c.copy()})
             used_a.add(i)
             used_b.add(j)
+    rescue_audit = _rescue_with_local_coordinate_consensus(
+        first, second, visible_a, visible_b, candidates, links, used_a, used_b)
     states = []
     for side, fractions, used in [("source", fractions_a, used_a), ("target", fractions_b, used_b)]:
         for index, fraction in enumerate(fractions):
@@ -188,4 +286,5 @@ def match_snapshots(first, second, polygons_a, polygons_b, policy, *, show_progr
     return {"links": sorted(links, key=lambda link: (link["i"], link["j"])),
             "candidates": candidates, "node_states": states,
             "common_coverage_m2": common.area,
-            "fractions_a": fractions_a, "fractions_b": fractions_b}
+            "fractions_a": fractions_a, "fractions_b": fractions_b,
+            "coordinate_rescue": rescue_audit}
