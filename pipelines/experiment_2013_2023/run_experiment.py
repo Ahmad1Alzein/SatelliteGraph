@@ -17,6 +17,16 @@ Steps (each stops the run on failure; the full log is in <work>/logs/run.log):
   9 freeze strip        checks F1-F5 incl. full rebuild + GNN retraining; read-only release
  10 verify              compare all data outputs and key results with the original experiment
 Runtime on the original machine (GTX 1650, 4 CPU threads for the GNN): about 1 h 30 min.
+
+Stage groups (--until stops after a group; --resume continues an existing work folder):
+  segmentation  steps 1-3 + the segmentation part of step 4 (14 + paired 2023 v2 frozen releases)
+  graph         region graphs, temporal layers, spatio-temporal graphs (step 4) + strip mosaic/graph (step 6)
+  classical     rule-based change labels + audit montages (step 4) + audit verdicts (step 5)
+  gnn           steps 7-9 (needs classical: its change tables are the GNN's pseudo-labels) + full verification (10)
+  python run_experiment.py --work W --until segmentation
+  python run_experiment.py --work W --resume --until graph        (later: --until classical, then --until gnn)
+Groups run per group for all tiles instead of tile by tile; every step reads only the frozen outputs of the
+previous ones, so the results are identical (checked by the full verification of a staged run).
 """
 from __future__ import annotations
 
@@ -101,53 +111,84 @@ def run(step, args, work, log, envv):
         raise SystemExit(f"step '{step}' failed (exit {p.returncode}); see {work / 'logs' / 'run.log'}")
 
 
+STAGES = ("segmentation", "graph", "classical", "gnn")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--work", type=Path, default=PKG / "work", help="output folder (must not exist yet)")
-    ap.add_argument("--data", type=Path, default=PKG / "data", help="folder with dataset/ and aligned/")
-    ap.add_argument("--checkpoints", type=Path, default=PKG / "checkpoints", help="folder with satlens-segformer/ and DelineateAnythingv2.pt")
+    ap.add_argument("--work", type=Path, default=PKG / "work", help="output folder (must not exist yet, unless --resume)")
+    ap.add_argument("--data", type=Path, default=None, help="folder with dataset/ and aligned/ (default ./data)")
+    ap.add_argument("--checkpoints", type=Path, default=None, help="folder with satlens-segformer/ and DelineateAnythingv2.pt (default ./checkpoints)")
     ap.add_argument("--skip-input-check", action="store_true", help="run even if inputs differ from the original experiment")
+    ap.add_argument("--until", choices=STAGES, default="gnn", help="last stage group to run (default gnn = the whole experiment)")
+    ap.add_argument("--resume", action="store_true", help="continue an existing work folder after its last completed stage group")
     a = ap.parse_args()
-    work, data, ckpt = a.work.resolve(), a.data.resolve(), a.checkpoints.resolve()
+    work = a.work.resolve()
+    ledger = work / "logs" / "stages.json"
+    state = json.loads(ledger.read_text()) if a.resume and ledger.exists() else None
+    if a.resume and state is None:
+        raise SystemExit(f"--resume needs an existing staged run: {ledger} not found")
+    data = (a.data or (Path(state["data"]) if state else PKG / "data")).resolve()
+    ckpt = (a.checkpoints or (Path(state["checkpoints"]) if state else PKG / "checkpoints")).resolve()
     t0 = time.time()
 
     print("=== 1 check inputs")
     check_inputs(data, ckpt, strict=not a.skip_input_check)
 
-    print("=== 2 prepare work folder")
-    if work.exists() and any(work.iterdir()):
-        raise SystemExit(f"{work} exists and is not empty: frozen releases are never overwritten - choose a new --work folder")
-    shutil.copytree(PKG / "pipeline", work, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
-    (work / "coregistration").mkdir()
-    shutil.copy2(PKG / "reference" / "shift_samples.csv", work / "coregistration" / "shift_samples.csv")
-    (work / "logs").mkdir()
-    env = environment()
-    (work / "logs" / "environment.json").write_text(json.dumps(env, indent=2), encoding="utf-8")
-    ref_env = json.loads((PKG / "environment" / "reference_environment.json").read_text())
-    diffs = {k: (ref_env[k], env.get(k)) for k in ref_env if k not in ("platform", "gpu") and env.get(k) != ref_env[k]}
-    print(f"  python {env['python']} · torch {env.get('torch')} · GPU {env.get('gpu')}")
-    if diffs:
-        print("  NOTE: environment differs from the original experiment (results may not be byte-identical):")
-        for k, (r, g) in diffs.items():
-            print(f"    {k}: original {r}, here {g}")
+    if state is None:
+        print("=== 2 prepare work folder")
+        if work.exists() and any(work.iterdir()):
+            raise SystemExit(f"{work} exists and is not empty: frozen releases are never overwritten - choose a new --work folder (or --resume)")
+        shutil.copytree(PKG / "pipeline", work, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+        (work / "coregistration").mkdir()
+        shutil.copy2(PKG / "reference" / "shift_samples.csv", work / "coregistration" / "shift_samples.csv")
+        (work / "logs").mkdir()
+        env = environment()
+        (work / "logs" / "environment.json").write_text(json.dumps(env, indent=2), encoding="utf-8")
+        ref_env = json.loads((PKG / "environment" / "reference_environment.json").read_text())
+        diffs = {k: (ref_env[k], env.get(k)) for k in ref_env if k not in ("platform", "gpu") and env.get(k) != ref_env[k]}
+        print(f"  python {env['python']} · torch {env.get('torch')} · GPU {env.get('gpu')}")
+        if diffs:
+            print("  NOTE: environment differs from the original experiment (results may not be byte-identical):")
+            for k, (r, g) in diffs.items():
+                print(f"    {k}: original {r}, here {g}")
+        state = {"data": str(data), "checkpoints": str(ckpt), "completed": []}
+    else:
+        print(f"=== 2 resume {work} (completed: {', '.join(state['completed']) or 'none'})")
     envv = dict(os.environ, REPRO_PACKAGE=str(PKG), REPRO_DATA=str(data), REPRO_CHECKPOINTS=str(ckpt),
                 YOLO_CONFIG_DIR=str(work / ".ultralytics"), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
 
-    with open(work / "logs" / "run.log", "w", encoding="utf-8") as log:
-        run("3 prepare inputs", ["prepare_inputs.py"], work, log, envv)
-        run("4 per-tile pipeline (7 tiles)", ["run_tile_pipeline.py", *TILES], work, log, envv)
-        run("5 audit verdicts", ["transfer_audit_verdicts.py"], work, log, envv)
-        run("6 strip mosaic + spatio-temporal graph", ["build_mosaic.py"], work, log, envv)
-        run("7 GNN change detection", ["gnn_change.py"], work, log, envv)
-        run("8a thesis figures", ["thesis_figures.py"], work, log, envv)
-        run("8b GNN prediction figures (tile_00002)", ["validation/gnn_predictions_tile_viz.py", "tile_00002"], work, log, envv)
-        run("9 freeze strip release", ["freeze_strip.py"], work, log, envv)
+    def done(group):
+        state["completed"].append(group); state[f"{group}_finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        ledger.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
-    print("\n=== 10 verify against the original experiment")
+    todo = [g for g in STAGES[:STAGES.index(a.until) + 1] if g not in state["completed"]]
+    with open(work / "logs" / "run.log", "a", encoding="utf-8") as log:
+        if "segmentation" in todo:
+            run("3 prepare inputs", ["prepare_inputs.py"], work, log, envv)
+            run("4a segmentation (7 tiles)", ["run_tile_pipeline.py", "--stages=segmentation", *TILES], work, log, envv)
+            done("segmentation")
+        if "graph" in todo:
+            run("4b region graphs, temporal layers, spatio-temporal graphs (7 tiles)", ["run_tile_pipeline.py", "--stages=graph", *TILES], work, log, envv)
+            run("6 strip mosaic + spatio-temporal graph", ["build_mosaic.py"], work, log, envv)
+            done("graph")
+        if "classical" in todo:
+            run("4c rule-based change detection + audit montages (7 tiles)", ["run_tile_pipeline.py", "--stages=classical", *TILES], work, log, envv)
+            run("5 audit verdicts", ["transfer_audit_verdicts.py"], work, log, envv)
+            done("classical")
+        if "gnn" in todo:
+            run("7 GNN change detection", ["gnn_change.py"], work, log, envv)
+            run("8a thesis figures", ["thesis_figures.py"], work, log, envv)
+            run("8b GNN prediction figures (tile_00002)", ["validation/gnn_predictions_tile_viz.py", "tile_00002"], work, log, envv)
+            run("9 freeze strip release", ["freeze_strip.py"], work, log, envv)
+            done("gnn")
+
     sys.path.insert(0, str(PKG))
     import verify_outputs
-    code = verify_outputs.main(work)
-    print(f"\ntotal {(time.time() - t0) / 60:.1f} min · report: {work / 'REPRODUCTION_REPORT.md'}")
+    full = "gnn" in state["completed"]
+    print(f"\n=== 10 verify against the original experiment ({'all outputs' if full else 'outputs produced so far'})")
+    code = verify_outputs.main(work, partial=not full)
+    print(f"\ntotal {(time.time() - t0) / 60:.1f} min · completed: {', '.join(state['completed'])} · report: {work / 'REPRODUCTION_REPORT.md'}")
     sys.exit(code)
 
 

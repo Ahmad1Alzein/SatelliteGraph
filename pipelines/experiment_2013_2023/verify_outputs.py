@@ -9,6 +9,8 @@ Two levels:
   key results  segment / edge counts, validation statuses and GNN metrics vs reference/expected_results.json.
 Writes <work>/REPRODUCTION_REPORT.md and reproduction_report.json.
 Exit code 0 = every data file byte-identical; 2 = key results identical but some files differ; 1 = results differ.
+Partial mode (a run stopped early with --until): only the reference files produced so far are compared; key results
+are checked only once the whole experiment has run. Status PARTIAL-EXACT = every produced file is byte-identical.
 """
 from __future__ import annotations
 
@@ -78,22 +80,26 @@ def flat(d, pre=""):
             yield f"{pre}{k}", v
 
 
-def main(work: Path) -> int:
+def main(work: Path, partial: bool = False) -> int:
     exp_files = json.loads((PKG / "reference" / "expected_outputs.json").read_text())
     exp_res = json.loads((PKG / "reference" / "expected_results.json").read_text())
     got_files = collect(work)
+    if partial:
+        exp_files = {f: h for f, h in exp_files.items() if f in got_files}
     missing = sorted(set(exp_files) - set(got_files)); extra = sorted(set(got_files) - set(exp_files))
     differ = sorted(f for f in exp_files if f in got_files and got_files[f] != exp_files[f])
     same = len(exp_files) - len(missing) - len(differ)
     try:
-        got_res, err = key_results(work), None
+        got_res, err = (key_results(work), None) if not partial else ({}, "partial run: key results are checked after the gnn stage")
     except Exception as e:  # incomplete run
         got_res, err = {}, f"{type(e).__name__}: {e}"
-    E, G = dict(flat(exp_res)), dict(flat(got_res))
+    E, G = (dict(flat(exp_res)) if not partial else {}), dict(flat(got_res))
     res_diff = [(k, E[k], G.get(k, "missing")) for k in E if G.get(k, "missing") != E[k]]
     files_ok, res_ok = not missing and not differ, not res_diff and err is None
     status = "EXACT" if files_ok and res_ok else ("RESULTS IDENTICAL, SOME FILES DIFFER" if res_ok else "DIFFERENT")
     code = 0 if status == "EXACT" else (2 if res_ok else 1)
+    if partial:
+        status, code = ("PARTIAL-EXACT", 0) if files_ok else ("PARTIAL-DIFFERENT", 1)
     rep = {"status": status, "files_expected": len(exp_files), "files_identical": same, "missing": missing, "differing": differ,
            "extra_not_in_reference": extra, "key_results_checked": len(E), "key_results_differing": res_diff, "error": err}
     (work / "reproduction_report.json").write_text(json.dumps(rep, indent=2, default=str), encoding="utf-8")
