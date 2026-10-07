@@ -60,6 +60,21 @@ refinement decisions and similarity formulas is available in
 Stages 2, 2R, and 3 operate on one tile at a time. Stage 4 performs the
 cross-tile reconciliation and graph combination.
 
+## Selectable pipeline: old/new segmentation, graph and change detection
+
+The repository also contains the verified 2013–2023 thesis pipeline (`pipelines/experiment_2013_2023`).
+`python -m src pipeline` runs either pipeline, one stage at a time or end to end:
+
+```powershell
+python -m src pipeline run --segmentation new --graph new --change gnn --output artifactsuns
+ew_new_gnn
+python -m src pipeline run --segmentation old --graph old --change classical --output artifactsuns\old_old_classical `
+  --folders tiles17_233 tiles17_233 --register-images
+```
+
+Supported combinations, inputs, environment, stage-by-stage commands and the output layout are described in
+[Selectable pipeline](docs/pipeline-options.md).
+
 ## Setup
 
 The repository has one dependency file and one project configuration file:
