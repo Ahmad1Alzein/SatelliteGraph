@@ -19,6 +19,7 @@ Run folder layout (one folder per run; artifacts/ is git-ignored):
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -104,7 +105,7 @@ def _run_new(output: Path, until: str, options: dict) -> dict:
             cmd += [flag, str(Path(options[key]).resolve())]
     if options.get("skip_input_check"):
         cmd.append("--skip-input-check")
-    r = subprocess.run(cmd, cwd=PACKAGE)
+    r = subprocess.run(cmd, cwd=PACKAGE, env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1"))  # readable logs on any console
     stages = json.loads((work / "logs" / "stages.json").read_text()) if (work / "logs" / "stages.json").exists() else {}
     if NEW_GROUP[until] not in stages.get("completed", []):
         raise RuntimeError(f"experiment stage '{until}' did not complete (exit {r.returncode}); see {work / 'logs' / 'run.log'}")
