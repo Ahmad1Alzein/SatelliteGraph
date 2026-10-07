@@ -1,0 +1,356 @@
+# Package edits vs the code of the successful run (input locations + font paths only)
+--- successful_run/build_graph.py
++++ package/build_graph.py
+@@ -23,6 +23,8 @@
+ import json
+ import math
+ from pathlib import Path
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import networkx as nx
+@@ -295,7 +297,7 @@
+     for r in node_out.itertuples():
+         x, y = P[r.segment_id]; rad = 4 + 2.2 * math.log10(max(r.area_m2, 10))
+         d.ellipse((x - rad, y - rad, x + rad, y + rad), fill=COLORS[r.class_id], outline=(0, 0, 0))
+-    f = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 26)
++    f = ImageFont.truetype(fonts.BOLD, 26)
+     d.rectangle((0, 0, S, 44), fill=(20, 20, 24))
+     d.text((14, 8), f"{len(node_out)} nodes · {len(E)} edges   (white = touches, magenta = near, building-building ≤ {NEAR_M:.0f} m)", font=f, fill="white")
+     im.save(out / "graph_overview.png", optimize=True)
+--- successful_run/build_mosaic.py
++++ package/build_mosaic.py
+@@ -28,6 +28,8 @@
+ from collections import Counter, defaultdict
+ from pathlib import Path
+ 
++import paths  # package: input/checkpoint locations
++
+ import cv2
+ import networkx as nx
+ import numpy as np
+@@ -46,7 +48,7 @@
+ import temporal_layer as tl
+ 
+ HERE = Path(__file__).resolve().parent
+-META = HERE.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
++META = paths.META_2023   # package: input location from paths.py
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+ NAME = "strip_tile_00000-00006"
+ OUT = HERE / "graphs" / f"strip_{NAME.split('_', 1)[1]}"
+--- successful_run/build_stgraph.py
++++ package/build_stgraph.py
+@@ -26,6 +26,8 @@
+ import hashlib
+ import json
+ from pathlib import Path
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import networkx as nx
+@@ -309,7 +311,7 @@
+                 d.line([pos[r.src], pos[r.dst]], fill=styles[rel][0], width=styles[rel][1])
+     for g, (x, y) in pos.items():
+         d.ellipse((x - 6, y - 6, x + 6, y + 6), fill=COL[cls[g]], outline=(0, 0, 0))
+-    f = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 24); fs = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 17)
++    f = ImageFont.truetype(fonts.BOLD, 24); fs = ImageFont.truetype(fonts.REGULAR, 17)
+     d.text((20, 15), f"Spatio-temporal graph, zoom ({S * 0.75:.0f} m window): {sum(1 for g in pos if yr[g]=='2013')} + {sum(1 for g in pos if yr[g]=='2023')} nodes", font=f, fill="white")
+     d.text(plane_xy("2023", 0, 0), " 2023", font=f, fill="yellow"); d.text(plane_xy("2013", 0, 0), " 2013", font=f, fill="yellow")
+     d.text((20, canvas.height - 45), "grey spatial touches · magenta spatial near · cyan temporal identity · yellow temporal contained-in · dark red temporal overlap (secondary)", font=fs, fill=(220, 220, 220))
+@@ -346,7 +348,7 @@
+         d.line([pos[r.src], pos[r.dst]], fill=tcol[r.relation], width=1)
+     for r in nodes.itertuples():
+         x, y = pos[r.gid]; d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=COL[r.class_id])
+-    f = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 24); fs = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 18)
++    f = ImageFont.truetype(fonts.BOLD, 24); fs = ImageFont.truetype(fonts.REGULAR, 18)
+     d.text((20, 15), f"Spatio-temporal graph {tile}: {len(nodes)} nodes, {len(E)} edges", font=f, fill="white")
+     d.text(plane_xy("2023", 0, 0), " 2023", font=f, fill="yellow"); d.text(plane_xy("2013", 0, 0), " 2013", font=f, fill="yellow")
+     d.text((20, H - 40), "grey = spatial touches · magenta = spatial near · cyan = temporal identity · yellow = temporal contained-in · (secondary temporal overlap edges not drawn)", font=fs, fill=(220, 220, 220))
+--- successful_run/final_strip_2013_2023.py
++++ package/final_strip_2013_2023.py
+@@ -20,6 +20,8 @@
+ import time
+ from pathlib import Path
+ 
++import paths  # package: input/checkpoint locations
++
+ import cv2
+ import numpy as np
+ import pandas as pd
+@@ -31,7 +33,7 @@
+ import segment_v2
+ 
+ ALIGNED = Path(__file__).resolve().parent / "inputs" / "aligned"   # run: dataset tiles + full-raster margin
+-META = Path(__file__).resolve().parent.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
++META = paths.META_2023   # package: input location from paths.py
+ REFERENCE = ("2023", ALIGNED / "shouf_2023_shared_epsg32636_1p5m.tif")
+ MOVING = ("2013", ALIGNED / "shouf_2013_epsg32636_1p5m.tif")
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+--- successful_run/final_strip_qa.py
++++ package/final_strip_qa.py
+@@ -16,6 +16,8 @@
+ import sys
+ from collections import defaultdict
+ from pathlib import Path
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import numpy as np
+@@ -177,7 +179,7 @@
+ 
+ def render(lab13, n13, lab23, n23):
+     imgs = {y: rasterio.open(D / ("input_2023_harmonized.tif" if y == "2023" else "input_2013_coregistered_harmonized.tif")).read().transpose(1, 2, 0) for y in YEARS}
+-    font = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 18)
++    font = ImageFont.truetype(fonts.BOLD, 18)
+     rng = np.random.default_rng(3)
+     windows = [(40, 280, 128), (300, 1460, 128), (160, 2860, 128), (380, 600, 128)]
+     tiles = []
+--- successful_run/freeze_and_validate.py
++++ package/freeze_and_validate.py
+@@ -31,6 +31,8 @@
+ from collections import Counter
+ from pathlib import Path
+ 
++import paths  # package: input/checkpoint locations
++
+ import cv2
+ import numpy as np
+ import pandas as pd
+@@ -53,8 +55,8 @@
+ RELEASE_FILES = ["segment_ids.tif", "segment_classes.tif", "segments.gpkg", "nodes.csv", "edges.csv",
+                  "merge_log.csv", "run_log.json", "viz_full.png", "viz_zooms.png", "viz_merge_decisions.png",
+                  "segment_ids_before_merge.tif", "README.md"]
+-MODELS = {"segformer": ROOT / "semantic_hybrid" / "models" / "satlens-segformer" / "model.safetensors",
+-          "delineate_anything_v2": ROOT / "Delineate-Anything" / "checkpoints" / "DelineateAnythingv2.pt"}
++MODELS = {"segformer": paths.SEGFORMER_DIR / "model.safetensors",   # package: checkpoint locations from paths.py
++          "delineate_anything_v2": paths.DELANY_CKPT}
+ PX_AREA, PX_M = 0.5625, 0.75
+ 
+ 
+--- successful_run/prepare_pair_tile.py
++++ package/prepare_pair_tile.py
+@@ -17,6 +17,8 @@
+ import json
+ from pathlib import Path
+ 
++import paths  # package: input/checkpoint locations
++
+ import numpy as np
+ import pandas as pd
+ import rasterio
+@@ -26,7 +28,7 @@
+ 
+ HERE = Path(__file__).resolve().parent
+ ROOT = HERE.parent
+-META = HERE.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
++META = paths.META_2023   # package: input location from paths.py
+ OUT = HERE / "final_segmentation" / "inputs"
+ CTX = 256
+ 
+--- successful_run/segment_final_viz.py
++++ package/segment_final_viz.py
+@@ -4,6 +4,8 @@
+ import argparse
+ import json
+ from pathlib import Path
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import numpy as np
+@@ -15,7 +17,7 @@
+ 
+ 
+ def font(size, bold=True):
+-    return ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf", size)
++    return ImageFont.truetype(fonts.BOLD if bold else fonts.REGULAR, size)
+ 
+ 
+ def boundaries(lab):
+--- successful_run/segment_v2.py
++++ package/segment_v2.py
+@@ -38,6 +38,8 @@
+ from collections import Counter, defaultdict
+ from pathlib import Path
+ 
++import paths  # package: input/checkpoint locations
++
+ from osgeo import gdal, ogr, osr  # must load before torch (Windows DLL order)
+ import cv2
+ import numpy as np
+@@ -54,7 +56,7 @@
+ ROOT = Path(__file__).resolve().parents[1]
+ INPUT_DIR = ROOT / "prepared_input" / "2013"
+ METADATA = ROOT / "2013" / "metadata.csv"
+-DELANY_CKPT = ROOT / "Delineate-Anything" / "checkpoints" / "DelineateAnythingv2.pt"
++DELANY_CKPT = paths.DELANY_CKPT   # package: checkpoint location from paths.py
+ OUT_ROOT = ROOT / "segmentation_v2" / "outputs"
+ 
+ SCALE = 2
+--- successful_run/semantic_ms.py
++++ package/semantic_ms.py
+@@ -10,13 +10,15 @@
+ 
+ from pathlib import Path
+ 
++import paths  # package: input/checkpoint locations
++
+ import numpy as np
+ import torch
+ import torch.nn.functional as F
+ from transformers import AutoModelForSemanticSegmentation
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+-MODEL_DIR = ROOT / "semantic_hybrid" / "models" / "satlens-segformer"
++MODEL_DIR = paths.SEGFORMER_DIR   # package: checkpoint location from paths.py
+ MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+ STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+ 
+--- successful_run/stgraph_change.py
++++ package/stgraph_change.py
+@@ -31,6 +31,8 @@
+ import json
+ from collections import defaultdict
+ from pathlib import Path
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import networkx as nx
+@@ -298,12 +300,12 @@
+                 a = nyear["2013"].loc[r.node_2013]; b = nyear["2023"].loc[r.node_2023]
+                 pa = ((a.node_x - tr.c) / tr.a, (a.node_y - tr.f) / tr.e); pb = ((b.node_x - tr.c) / tr.a, (b.node_y - tr.f) / tr.e)
+                 d.line([pa, pb], fill=(0, 220, 255), width=2); d.ellipse((pa[0] - 4, pa[1] - 4, pa[0] + 4, pa[1] + 4), fill=(0, 220, 255))
+-        d.text((10, 8), y, font=ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 26), fill="white", stroke_width=2, stroke_fill="black")
++        d.text((10, 8), y, font=ImageFont.truetype(fonts.BOLD, 26), fill="white", stroke_width=2, stroke_fill="black")
+         panels.append(np.array(p))
+     canvas = np.concatenate([panels[0], np.full((S, 10, 3), 25, np.uint8), panels[1]], 1)
+     head = Image.new("RGB", (canvas.shape[1], 40), (25, 25, 25))
+     ImageDraw.Draw(head).text((12, 9), "high confidence: red = new building, orange = extension · cyan (2013) = land converted to building; cyan lines (2023) = conversion change edges",
+-                              font=ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 17), fill="white")
++                              font=ImageFont.truetype(fonts.REGULAR, 17), fill="white")
+     Image.fromarray(np.concatenate([np.array(head), canvas], 0)).save(out / "change_overview.png", optimize=True)
+ 
+ 
+--- successful_run/temporal_layer.py
++++ package/temporal_layer.py
+@@ -38,6 +38,8 @@
+ import json
+ from collections import Counter
+ from pathlib import Path
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import networkx as nx
+@@ -185,7 +187,7 @@
+     for (n, c) in ((n13, (0, 200, 255)), (n23, (255, 255, 255))):
+         for r in n.itertuples():
+             x, y = px(r.node_x, r.node_y); d.ellipse((x - 4, y - 4, x + 4, y + 4), fill=c, outline=(0, 0, 0))
+-    f = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 26)
++    f = ImageFont.truetype(fonts.BOLD, 26)
+     d.rectangle((0, 0, S, 46), fill=(20, 20, 24))
+     d.text((12, 9), f"{len(E)} temporal edges   green high  yellow medium (primary)  thin red low (secondary)   ·   cyan = 2013 node, white = 2023 node (on 2023 image)", font=f, fill="white")
+     im.save(out / "temporal_overview.png", optimize=True)
+@@ -235,11 +237,11 @@
+         e = np.zeros(seg.shape, bool); e[:, 1:] |= seg[:, 1:] != seg[:, :-1]; e[1:] |= seg[1:] != seg[:-1]
+         out_img[e] = (20, 20, 20)
+         p = Image.fromarray(out_img); d = ImageDraw.Draw(p)
+-        d.text((10, 8), year, font=ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 30), fill="white", stroke_width=2, stroke_fill="black")
++        d.text((10, 8), year, font=ImageFont.truetype(fonts.BOLD, 30), fill="white", stroke_width=2, stroke_fill="black")
+         panels.append(np.array(p))
+     canvas = np.concatenate([panels[0], np.full((panels[0].shape[0], 12, 3), 25, np.uint8), panels[1]], 1)
+     leg = Image.new("RGB", (canvas.shape[1], 46), (25, 25, 25)); d = ImageDraw.Draw(leg); x = 12
+-    f = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 19)
++    f = ImageFont.truetype(fonts.REGULAR, 19)
+     for name, c in (("one-to-one", colors["one_to_one"]), ("one-to-many (1 x 2013 : n x 2023)", colors["one_to_many"]),
+                     ("many-to-one", colors["many_to_one"]), ("many-to-many", colors["many_to_many"]), ("no primary match", (90, 90, 90))):
+         d.rectangle((x, 13, x + 20, 33), fill=c); d.text((x + 28, 23), name, font=f, fill="white", anchor="lm"); x += 60 + int(d.textlength(name, font=f))
+--- successful_run/thesis_figures.py
++++ package/thesis_figures.py
+@@ -17,6 +17,10 @@
+ import math
+ from pathlib import Path
+ 
++import fonts  # package: portable font paths
++
++import paths  # package: input/checkpoint locations
++
+ import cv2
+ import matplotlib
+ matplotlib.use("Agg")
+@@ -32,7 +36,7 @@
+ HERE = Path(__file__).resolve().parent
+ OUT = HERE / "thesis_figures"
+ STRIP = HERE / "graphs" / "strip_tile_00000-00006"
+-META = Path(__file__).resolve().parent.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
++META = paths.META_2023   # package: input location from paths.py
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+ SURF, INK, INK2, RULE = "#fcfcfb", "#0b0b0b", "#52514e", "#d9d8d4"
+ S1, S2, S3 = "#2a78d6", "#eb6834", "#1baf7a"     # validated categorical slots 1-3 (all-pairs safe)
+@@ -40,7 +44,7 @@
+ 
+ 
+ def font(sz, bold=True):
+-    return ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf", sz)
++    return ImageFont.truetype(fonts.BOLD if bold else fonts.REGULAR, sz)
+ 
+ 
+ def boundaries(lab):
+--- successful_run/validation/stgraph_change_audit_tile.py
++++ package/validation/stgraph_change_audit_tile.py
+@@ -4,6 +4,10 @@
+ import json
+ import sys
+ from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # package: pipeline/ modules
++
++import fonts  # package: portable font paths
+ 
+ import cv2
+ import numpy as np
+@@ -14,7 +18,7 @@
+ HERE = Path(__file__).resolve().parents[1]
+ TILE = sys.argv[1] if len(sys.argv) > 1 else "tile_00002"
+ OUT = HERE / "graphs" / f"change_stgraph_2013_2023_{TILE}"
+-F = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 13)
++F = ImageFont.truetype(fonts.BOLD, 13)
+ man = json.loads((HERE / "graphs" / f"FROZEN_stgraph_2013_2023_{TILE}_v1" / "MANIFEST.json").read_text())
+ rels = {k.split("/")[0] for k in man["inputs"] if k.startswith("FROZEN_20")}
+ IMG, SEG = {}, {}
+--- successful_run/validation/gnn_predictions_tile_viz.py
++++ package/validation/gnn_predictions_tile_viz.py
+@@ -16,6 +16,11 @@
+ import sys
+ from pathlib import Path
+ 
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # package: pipeline/ modules
++
++import fonts  # package: portable font paths
++import paths  # package: input locations
++
+ import cv2
+ import numpy as np
+ import pandas as pd
+@@ -24,7 +29,7 @@
+ 
+ HERE = Path(__file__).resolve().parents[1]
+ STRIP = HERE / "graphs" / "strip_tile_00000-00006"
+-META = HERE.parent / "dataset" / "2023" / "metadata.csv"
++META = paths.META_2023   # package: input location from paths.py
+ TILE = sys.argv[1] if len(sys.argv) > 1 else "tile_00002"
+ OUT = HERE / f"gnn_viz_{TILE}"
+ # validated categorical slots (reference palette): 1 blue = 2013 land node predicted built over, 2 orange = 2023 building predicted new/extended
+@@ -34,7 +39,7 @@
+ 
+ 
+ def font(sz, bold=True):
+-    return ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf", sz)
++    return ImageFont.truetype(fonts.BOLD if bold else fonts.REGULAR, sz)
+ 
+ 
+ def edge(m, w=2):
