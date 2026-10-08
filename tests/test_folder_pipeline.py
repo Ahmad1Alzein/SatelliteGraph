@@ -249,6 +249,58 @@ class FolderPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "complete"):
                 compare_folders(root/"a", root/"b", root/"comparison")
 
+    def test_segmentation_then_graph_equals_one_complete_run(self):
+        """stop_after='segmentation' + a second call must give the same graph as one uninterrupted run."""
+        from src.folder_pipeline import run_folder
+        from src.stage4 import load_stage4_result
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cfg = load_config(DEFAULT_CONFIG)
+            cfg["stage2"]["instance_model"]["backend"] = "fake"
+            cfg["stage2"]["semantic_model"]["backend"] = "fake"
+            (root/"fake-config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+            folder = root/"2017"
+            folder.mkdir()
+            image = np.full((64, 64, 4), 80, dtype=np.uint8)
+            yy, xx = np.indices((64, 64))
+            image[:,:,0] = xx + 40
+            image[:,:,1] = yy + 40
+            image[:,:,2] = xx + yy + 40
+            image[:,:,3] = 255
+            cv2.imwrite(str(folder/"tile_00000.png"), image)
+            with rasterio.open(folder/"source.tif", "w", driver="GTiff", width=64, height=64,
+                               count=3, dtype="uint8", crs="EPSG:32636",
+                               transform=from_origin(500000, 3700000, 1.5, 1.5)) as output:
+                output.write(np.moveaxis(cv2.cvtColor(image, cv2.COLOR_BGRA2RGB), -1, 0))
+            with (folder/"metadata.csv").open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=["tile_name", "x0", "y0", "width", "height"])
+                writer.writeheader()
+                writer.writerow(dict(tile_name="tile_00000.png", x0=0, y0=0, width=64, height=64))
+            common = dict(config="fake-config.yaml", project_root=root, show_progress=False)
+            staged = root/"staged"
+            first = run_folder(folder, 2017, staged, stop_after="segmentation", **common)
+            self.assertEqual(first["status"], "segmented")
+            state = json.loads((staged/"run.json").read_text())
+            self.assertEqual(state["status"], "segmented")
+            self.assertEqual(state["tiles"]["source__tile_00000"]["status"], "segmented")
+            self.assertTrue((staged/"stage2/source__tile_00000/13_refinement/segmentation.npz").is_file())
+            self.assertFalse((staged/"stage3").exists())
+            again = run_folder(folder, 2017, staged, stop_after="segmentation", **common)
+            self.assertEqual(again["status"], "segmented")
+            finished = run_folder(folder, 2017, staged, **common)
+            self.assertEqual(finished["status"], "complete")
+            whole = run_folder(folder, 2017, root/"whole", **common)
+            a = load_stage4_result(finished["combined_graph_directory"])
+            b = load_stage4_result(whole["combined_graph_directory"])
+            self.assertEqual((len(a.nodes), len(a.edges)), (len(b.nodes), len(b.edges)))
+            # same nodes and edges; provenance hashes differ only because they encode the output folder
+            graphs = [json.loads((run/"stage3/source__tile_00000/01_graph/graph.json").read_text().replace(run.name, "RUN"))
+                      for run in (staged, root/"whole")]
+            self.assertEqual(graphs[0]["nodes"], graphs[1]["nodes"])
+            self.assertEqual(graphs[0]["edges"], graphs[1]["edges"])
+            with self.assertRaisesRegex(ValueError, "stop_after"):
+                run_folder(folder, 2017, root/"bad", stop_after="graph", **common)
+
     def test_both_folder_commands_complete_with_test_models(self):
         from src.folder_pipeline import compare_folders, run_folder
         from src.stage4 import load_stage4_result

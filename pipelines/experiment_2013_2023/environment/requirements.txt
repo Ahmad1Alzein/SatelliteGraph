@@ -1,0 +1,16 @@
+# Minimal pinned requirements (versions of the original experiment). GDAL is easiest from conda-forge:
+#   conda create -n repro-2013-2023 -c conda-forge python=3.11 gdal=3.13.3 rasterio=1.4.3
+#   pip install -r environment/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+numpy==2.3.5
+pandas==3.0.6
+scipy==1.17.1
+shapely==2.1.1
+opencv-python==4.11.0.86
+pillow==12.3.0
+matplotlib==3.11.2
+networkx==3.6.1
+transformers==5.18.0
+ultralytics==8.3.148
+affine==3.0.1

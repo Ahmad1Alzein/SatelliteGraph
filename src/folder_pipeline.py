@@ -156,8 +156,14 @@ def _require_micro_unknown_omission(refined):
 
 def run_folder(folder, year, output, *, source_raster=None, metadata=None,
                config=DEFAULT_CONFIG, project_root=".", show_progress=True,
-               selected_image=None):
-    """Complete Stage 2, automatic Stage 2R, Stage 3, and Stage 4 for every PNG."""
+               selected_image=None, stop_after=None):
+    """Complete Stage 2, automatic Stage 2R, Stage 3, and Stage 4 for every PNG.
+
+    ``stop_after="segmentation"`` ends after Stage 2 + automatic Stage 2R for every tile (run status
+    ``segmented``); calling again without it continues those tiles with Stage 3 and Stage 4 only.
+    """
+    if stop_after not in (None, "segmentation"):
+        raise ValueError("stop_after must be None or 'segmentation'")
     if isinstance(year,bool) or not isinstance(year,int) or not 1<=year<=9999:
         raise ValueError("year must be an integer in 1..9999")
     root=Path(project_root).resolve()
@@ -234,23 +240,37 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
                 load_stage3_result(output/"stage3"/tile_id/"01_graph")
                 validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
                 continue
-            state["current_step"]=f"{index}/{len(ids)} {tile_id}: segmentation"
-            atomic_json(ledger,state)
-            print(state["current_step"],flush=True)
-            if sam is None:
-                sam=create_backend(instance_config(selected),root);sam.load()
-                semantic=create_semantic_backend(semantic_config(selected),root);semantic.load()
-            segmented=run_stage2(tile_id,project_root=root,config=selected,
-                                 sam_backend=sam,semantic_backend=semantic,show_progress=show_progress)
-            entry["segmentation"]={"status":"complete","segment_count":len(segmented.segments)}
-            state["current_step"]=f"{tile_id}: automatic refinement and noise cleanup"
-            atomic_json(ledger,state)
-            refined=apply_refinement(tile_id,project_root=root,config=selected,
-                                     workflow_mode="automatic",show_progress=show_progress)
-            _require_micro_unknown_omission(refined)
-            entry["refinement"]={"status":"complete","output_directory":str(refined.output_directory)}
-            validated=validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
-            entry["refinement_validation"]={"status":validated["status"]}
+            segmented_before=entry.get("status")=="segmented"
+            if segmented_before:
+                _require_micro_unknown_omission(
+                    load_refinement_result(output/"stage2"/tile_id/"13_refinement")
+                )
+                validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
+                if stop_after=="segmentation":
+                    continue
+            if not segmented_before:
+                state["current_step"]=f"{index}/{len(ids)} {tile_id}: segmentation"
+                atomic_json(ledger,state)
+                print(state["current_step"],flush=True)
+                if sam is None:
+                    sam=create_backend(instance_config(selected),root);sam.load()
+                    semantic=create_semantic_backend(semantic_config(selected),root);semantic.load()
+                segmented=run_stage2(tile_id,project_root=root,config=selected,
+                                     sam_backend=sam,semantic_backend=semantic,show_progress=show_progress)
+                entry["segmentation"]={"status":"complete","segment_count":len(segmented.segments)}
+                state["current_step"]=f"{tile_id}: automatic refinement and noise cleanup"
+                atomic_json(ledger,state)
+                refined=apply_refinement(tile_id,project_root=root,config=selected,
+                                         workflow_mode="automatic",show_progress=show_progress)
+                _require_micro_unknown_omission(refined)
+                entry["refinement"]={"status":"complete","output_directory":str(refined.output_directory)}
+                validated=validate_refinement(tile_id,project_root=root,config=selected,show_progress=False)
+                entry["refinement_validation"]={"status":validated["status"]}
+            if stop_after=="segmentation":
+                entry["status"]="segmented"
+                state["tiles"][tile_id]=entry
+                atomic_json(ledger,state)
+                continue
             state["current_step"]=f"{tile_id}: tile graph"
             atomic_json(ledger,state)
             graph=run_stage3(tile_id,project_root=root,config=selected,show_progress=show_progress)
@@ -259,6 +279,11 @@ def run_folder(folder, year, output, *, source_raster=None, metadata=None,
             entry["status"]="complete"
             state["tiles"][tile_id]=entry
             atomic_json(ledger,state)
+        if stop_after=="segmentation":
+            state.pop("current_step",None)
+            state.update(status="segmented",segmented_at=now())
+            atomic_json(ledger,state)
+            return {"status":"segmented","year":year,"tile_count":len(ids)}
         if state.get("status")=="complete":
             combined=load_stage4_result(state["combined_graph_directory"])
         else:

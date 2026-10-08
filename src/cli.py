@@ -254,7 +254,52 @@ def parser() -> argparse.ArgumentParser:
     folder_compare.add_argument("--config", default=str(DEFAULT_CONFIG))
     folder_compare.add_argument("--project-root", default=".")
     folder_compare.add_argument("--no-progress", action="store_true")
+    _add_pipeline_parser(commands)
     return root
+
+
+def _add_pipeline_parser(commands) -> None:
+    """`pipeline`: selectable segmentation (old|new) -> graph (old|new) -> change (classical|gnn)."""
+    pipeline = commands.add_parser(
+        "pipeline",
+        help="Selectable pipeline: segmentation old|new -> graph old|new -> change detection classical|gnn",
+    )
+    phases = pipeline.add_subparsers(dest="phase", required=True)
+
+    def common(p):
+        p.add_argument("--output", required=True, help="Run folder, e.g. artifacts/runs/<name> (one folder per run)")
+        p.add_argument("--project-root", default=".")
+        new = p.add_argument_group("new pipeline inputs (pipelines/experiment_2013_2023)")
+        new.add_argument("--data", default="data/experiment_2013_2023", help="Folder with dataset/ and aligned/")
+        new.add_argument("--checkpoints", default="checkpoints/experiment_2013_2023",
+                         help="Folder with satlens-segformer/ and DelineateAnythingv2.pt")
+        new.add_argument("--skip-input-check", action="store_true", help="Allow inputs other than the 2013-2023 dataset")
+        old = p.add_argument_group("old pipeline inputs (SatelliteGraph stages 2-5)")
+        old.add_argument("--folders", nargs=2, default=None, metavar=("EARLIER", "LATER"),
+                         help="Two tile folders (PNG + metadata.csv + source GeoTIFF), earlier year first")
+        old.add_argument("--years", nargs=2, type=int, default=None, help="Years of --folders (default: folder names)")
+        old.add_argument("--source-rasters", nargs=2, default=None, help="GeoTIFFs if not beside the PNG tiles")
+        old.add_argument("--metadata", nargs=2, default=None, help="Tile offset CSVs if not beside the PNG tiles")
+        reg = old.add_mutually_exclusive_group()
+        reg.add_argument("--registration-json", default=None, help="Cross-year control points (old classical)")
+        reg.add_argument("--register-images", action="store_true", help="Estimate cross-year registration (old classical)")
+        old.add_argument("--boundary-tolerance", type=float, default=None)
+        old.add_argument("--config", default=str(DEFAULT_CONFIG))
+        old.add_argument("--no-progress", action="store_true")
+
+    for name, help_text, choices in (
+        ("segment", "Segment both years", ("old", "new")),
+        ("graph", "Build the graphs from a completed segmentation in --output", ("old", "new")),
+        ("change", "Detect change from completed graphs in --output", ("classical", "gnn")),
+    ):
+        p = phases.add_parser(name, help=help_text)
+        p.add_argument("--method", required=True, choices=choices)
+        common(p)
+    run = phases.add_parser("run", help="End to end: segmentation -> graph -> change detection")
+    run.add_argument("--segmentation", required=True, choices=("old", "new"))
+    run.add_argument("--graph", required=True, choices=("old", "new"))
+    run.add_argument("--change", required=True, choices=("classical", "gnn"))
+    common(run)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -407,6 +452,30 @@ def main(argv: list[str] | None = None) -> None:
                                          boundary_tolerance=args.boundary_tolerance,
                                          config=args.config,project_root=project_root,
                                          show_progress=not args.no_progress)
+        elif args.stage == "pipeline":
+            from src import pipeline_select as ps
+
+            def resolve(value):
+                if value is None:
+                    return None
+                path = Path(value)
+                return path if path.is_absolute() else project_root / path
+
+            options = {
+                "data": resolve(args.data), "checkpoints": resolve(args.checkpoints),
+                "skip_input_check": args.skip_input_check,
+                "folders": [resolve(f) for f in args.folders] if args.folders else None, "years": args.years,
+                "source_rasters": [resolve(f) for f in args.source_rasters] if args.source_rasters else None,
+                "metadata": [resolve(f) for f in args.metadata] if args.metadata else None,
+                "registration_json": resolve(args.registration_json), "register_images": args.register_images,
+                "boundary_tolerance": args.boundary_tolerance, "config": resolve(args.config),
+                "no_progress": args.no_progress,
+            }
+            output = resolve(args.output)
+            if args.phase == "run":
+                result = ps.run(args.segmentation, args.graph, args.change, output, **options)
+            else:
+                result = getattr(ps, args.phase)(args.method, output, **options)
         else:  # pragma: no cover - argparse restricts the available stages.
             raise ValueError(f"Unsupported stage: {args.stage}")
     except Exception as exc:
