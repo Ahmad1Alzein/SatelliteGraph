@@ -56,3 +56,10 @@ def verify_manifest(directory):
         p = (directory/name).resolve()
         if not p.is_relative_to(directory.resolve()) or not p.is_file() or sha256(p)!=digest:
             raise ValueError(f'Artifact changed or missing: {name}')
+
+
+def load_segmentation(path):
+    from .contracts import SegmentationArtifact,GridSpec
+    value=read_json(path);grid=value['grid']
+    grid=GridSpec(grid['crs'],tuple(grid['affine']),grid['units'],tuple(grid['physical_pixel_size']) if grid['physical_pixel_size'] else None)
+    return SegmentationArtifact(value['year'],value['tile_key'],Path(value['directory']),grid,tuple(value['shape_hw']),{k:Path(v) for k,v in value['paths'].items()},value['lineage'])
