@@ -1,7 +1,7 @@
 """Selectable pipeline: option wiring, refusal of non-native combinations, and the run ledger.
 
 The real stage runners are replaced by fakes; the end-to-end runs are covered by the experiment's own
-verification (pipelines/experiment_2013_2023/verify_outputs.py) and the existing folder-pipeline tests.
+verification (pipelines/semantic_temporal/verify_outputs.py) and the existing folder-pipeline tests.
 """
 from __future__ import annotations
 

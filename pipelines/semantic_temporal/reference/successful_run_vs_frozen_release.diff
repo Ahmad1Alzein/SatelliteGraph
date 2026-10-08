@@ -1,0 +1,68 @@
+--- frozen/build_mosaic.py
++++ run/build_mosaic.py
+@@ -46,7 +46,7 @@
+ import temporal_layer as tl
+ 
+ HERE = Path(__file__).resolve().parent
+-META = Path(r"D:\new\SatelliteGraph\data\metadata\shouf_2023_shared_tiles.csv")
++META = HERE.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+ NAME = "strip_tile_00000-00006"
+ OUT = HERE / "graphs" / f"strip_{NAME.split('_', 1)[1]}"
+--- frozen/final_strip_2013_2023.py
++++ run/final_strip_2013_2023.py
+@@ -30,8 +30,8 @@
+ import harmonize
+ import segment_v2
+ 
+-ALIGNED = Path(r"D:\new\SatelliteGraph\data\aligned")
+-META = Path(r"D:\new\SatelliteGraph\data\metadata\shouf_2023_shared_tiles.csv")
++ALIGNED = Path(__file__).resolve().parent / "inputs" / "aligned"   # run: dataset tiles + full-raster margin
++META = Path(__file__).resolve().parent.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
+ REFERENCE = ("2023", ALIGNED / "shouf_2023_shared_epsg32636_1p5m.tif")
+ MOVING = ("2013", ALIGNED / "shouf_2013_epsg32636_1p5m.tif")
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+--- frozen/freeze_strip.py
++++ run/freeze_strip.py
+@@ -30,7 +30,7 @@
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+ SRC = HERE / "graphs" / "strip_tile_00000-00006"
+ DEST = HERE / "graphs" / "FROZEN_strip_tile_00000-00006_v1"
+-SCRATCH = Path(r"C:\Users\USER\AppData\Local\Temp\claude\D--new-DelAnyV2-Experiment\d7494492-e4e6-43c3-9d3b-2d3ffaa38266\scratchpad\strip_rebuild")
++SCRATCH = HERE / "_scratch_strip_rebuild"   # run: own scratch folder
+ CODE = ["build_mosaic.py", "gnn_change.py", "thesis_figures.py", "freeze_strip.py", "build_graph.py", "segment_final.py",
+         "segment_v2.py", "temporal_layer.py", "final_strip_qa.py", "refine_merge.py", "semantic_ms.py"]
+ TABLES = ["2013/nodes.csv", "2013/edges.csv", "2013/seam_decisions.csv", "2023/nodes.csv", "2023/edges.csv", "2023/seam_decisions.csv",
+--- frozen/prepare_pair_tile.py
++++ run/prepare_pair_tile.py
+@@ -26,7 +26,7 @@
+ 
+ HERE = Path(__file__).resolve().parent
+ ROOT = HERE.parent
+-META = Path(r"D:\new\SatelliteGraph\data\metadata\shouf_2023_shared_tiles.csv")
++META = HERE.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
+ OUT = HERE / "final_segmentation" / "inputs"
+ CTX = 256
+ 
+--- frozen/run_tile_pipeline.py
++++ run/run_tile_pipeline.py
+@@ -37,7 +37,7 @@
+ def run_tile(tile):
+     print(f"=== {tile}", flush=True)
+     with open(HERE / f"pipeline_{tile}.log", "w", encoding="utf-8") as log:
+-        step(log, "segment 2023", ["segment_final.py", "--tile", tile, "--year", "2023"])
++        step(log, "segment 2023", ["segment_final.py", "--tile", tile, "--year", "2023", "--image", str(HERE / "inputs" / "2023" / f"{tile}.tif")])
+         step(log, "freeze 2023 v1", ["freeze_and_validate.py", "--tile", tile, "--year", "2023", "--version", "v1"])
+         step(log, "prepare 2013 pair", ["prepare_pair_tile.py", "--tile", tile, "--reference-release", f"FROZEN_2023_{tile}_v1",
+                                         "--write-harmonized-reference"])
+--- frozen/thesis_figures.py
++++ run/thesis_figures.py
+@@ -32,7 +32,7 @@
+ HERE = Path(__file__).resolve().parent
+ OUT = HERE / "thesis_figures"
+ STRIP = HERE / "graphs" / "strip_tile_00000-00006"
+-META = Path(r"D:\new\SatelliteGraph\data\metadata\shouf_2023_shared_tiles.csv")
++META = Path(__file__).resolve().parent.parent / "dataset" / "2023" / "metadata.csv"   # run: dataset metadata
+ TILES = [f"tile_{i:05d}" for i in range(7)]
+ SURF, INK, INK2, RULE = "#fcfcfb", "#0b0b0b", "#52514e", "#d9d8d4"
+ S1, S2, S3 = "#2a78d6", "#eb6834", "#1baf7a"     # validated categorical slots 1-3 (all-pairs safe)

@@ -3,7 +3,7 @@
 `python -m src pipeline …` runs either of the two pipelines in this repository, one stage at a time or end to
 end:
 
-| Stage | `old` (SatelliteGraph stages 2–5) | `new` (`pipelines/experiment_2013_2023`) |
+| Stage | `old` (SatelliteGraph stages 2–5) | `new` (`pipelines/semantic_temporal`) |
 |---|---|---|
 | Segmentation | SAM 2.1 Hiera-L + OpenEarthMap FasterSeg, Stage 2R automatic refinement (1.5 m) | multi-scale SegFormer + Delineate Anything v2 + RGB rules, frozen releases with checks C1–C15 (0.75 m) |
 | Graph | Stage 3 tile graphs + Stage 4 combined year graph (4-connected adjacency) | region graphs (`touches` + building `near` edges, 37 node / 9 edge features), temporal layer, spatio-temporal graph, 7-tile strip |
@@ -28,7 +28,7 @@ The following combinations are **refused**:
 
 **new**
 - Default folders, relative to the repository and git-ignored: `data/experiment_2013_2023/` (`dataset/2013`, `dataset/2023`, `aligned/`) and `checkpoints/experiment_2013_2023/` (`DelineateAnythingv2.pt`, `satlens-segformer/`). Use `--data` and `--checkpoints` to point elsewhere.
-- Every file is checked against `pipelines/experiment_2013_2023/reference/input_manifest.json` before the run (24 files). Use `--skip-input-check` for other data. The final verification then reports differences from the thesis results, which is expected for other data.
+- Every file is checked against `pipelines/semantic_temporal/reference/input_manifest.json` before the run (24 files). Use `--skip-input-check` for other data. The final verification then reports differences from the thesis results, which is expected for other data.
 
 **old**
 - `--folders EARLIER LATER`: two tile folders, each with PNG tiles, `metadata.csv` and the source GeoTIFF, as for `folder run`.
@@ -43,7 +43,7 @@ pip install -r requirements.txt          # old pipeline: SAM 2 (vendored), hydra
 ```
 
 The exact environment reproduces the thesis results byte for byte on the original hardware (see
-`pipelines/experiment_2013_2023/README.md`, section 5).
+`pipelines/semantic_temporal/README.md`, section 5).
 
 ## Commands
 

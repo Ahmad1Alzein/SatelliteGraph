@@ -110,7 +110,7 @@ ehthumbs.db
 Desktop.ini
 
 # Experiment 2013-2023 package: inputs, weights and runs are never committed
-/pipelines/experiment_2013_2023/data/
-/pipelines/experiment_2013_2023/checkpoints/
-/pipelines/experiment_2013_2023/work*/
+/pipelines/semantic_temporal/data/
+/pipelines/semantic_temporal/checkpoints/
+/pipelines/semantic_temporal/work*/
 /data/experiment_2013_2023/

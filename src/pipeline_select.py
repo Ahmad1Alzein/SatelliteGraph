@@ -2,7 +2,7 @@
 
 old  = SatelliteGraph stages 2/2R (SAM 2.1 + OpenEarthMap) -> stages 3/4 (tile graphs, combined year graph)
        -> stage 5 (temporal graph + classical change events)
-new  = pipelines/experiment_2013_2023 (frozen object segmentation -> region/temporal/spatio-temporal graphs ->
+new  = pipelines/semantic_temporal (frozen object segmentation -> region/temporal/spatio-temporal graphs ->
        rule-based "classical" change labels -> relational GNN), run through its own run_experiment.py
 
 Native combinations (the only ones accepted):
@@ -29,7 +29,7 @@ from src.config import DEFAULT_CONFIG
 from src.pipeline_state import input_fingerprint, validate_resume
 
 REPO = Path(__file__).resolve().parents[1]
-PACKAGE = REPO / "pipelines" / "experiment_2013_2023"
+PACKAGE = REPO / "pipelines" / "semantic_temporal"
 NATIVE = {("old", "old", "classical"), ("new", "new", "classical"), ("new", "new", "gnn")}
 NEW_GROUP = {"segmentation": "segmentation", "graph": "graph", "classical": "classical", "gnn": "gnn"}
 

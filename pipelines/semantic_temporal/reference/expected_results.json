@@ -1,0 +1,221 @@
+{
+  "tiles": {
+    "tile_00000": {
+      "coregistration": {
+        "translation_px": [
+          19.6,
+          18.59
+        ],
+        "tile_residual_px": [
+          -0.13,
+          0.66
+        ],
+        "disagreement_with_aoi_px": 1.11
+      },
+      "release_2023": "v1",
+      "segments_2013": 627,
+      "checks_2013": "15/15",
+      "segments_2023": 654,
+      "checks_2023": "15/15",
+      "temporal_edges": 1381,
+      "stgraph_status": "PASS"
+    },
+    "tile_00001": {
+      "coregistration": {
+        "translation_px": [
+          20.16,
+          18.61
+        ],
+        "tile_residual_px": [
+          -0.47,
+          0.29
+        ],
+        "disagreement_with_aoi_px": 1.05
+      },
+      "release_2023": "v1",
+      "segments_2013": 568,
+      "checks_2013": "15/15",
+      "segments_2023": 616,
+      "checks_2023": "15/15",
+      "temporal_edges": 1316,
+      "stgraph_status": "PASS"
+    },
+    "tile_00002": {
+      "coregistration": {
+        "translation_px": [
+          19.99,
+          18.98
+        ],
+        "tile_residual_px": [
+          0.12,
+          -0.13
+        ],
+        "disagreement_with_aoi_px": 0.66
+      },
+      "release_2023": "v2",
+      "segments_2013": 714,
+      "checks_2013": "15/15",
+      "segments_2023": 588,
+      "checks_2023": "15/15",
+      "temporal_edges": 1452,
+      "stgraph_status": "PASS"
+    },
+    "tile_00003": {
+      "coregistration": {
+        "translation_px": [
+          20.47,
+          19.6
+        ],
+        "tile_residual_px": [
+          0.75,
+          -0.0
+        ],
+        "disagreement_with_aoi_px": 0.51
+      },
+      "release_2023": "v2",
+      "segments_2013": 664,
+      "checks_2013": "15/15",
+      "segments_2023": 559,
+      "checks_2023": "15/15",
+      "temporal_edges": 1362,
+      "stgraph_status": "PASS"
+    },
+    "tile_00004": {
+      "coregistration": {
+        "translation_px": [
+          20.4,
+          19.8
+        ],
+        "tile_residual_px": [
+          0.51,
+          -0.12
+        ],
+        "disagreement_with_aoi_px": 0.47
+      },
+      "release_2023": "v1",
+      "segments_2013": 603,
+      "checks_2013": "15/15",
+      "segments_2023": 461,
+      "checks_2023": "15/15",
+      "temporal_edges": 1197,
+      "stgraph_status": "PASS"
+    },
+    "tile_00005": {
+      "coregistration": {
+        "translation_px": [
+          20.99,
+          20.38
+        ],
+        "tile_residual_px": [
+          -0.24,
+          -0.01
+        ],
+        "disagreement_with_aoi_px": 1.31
+      },
+      "release_2023": "v1",
+      "segments_2013": 462,
+      "checks_2013": "15/15",
+      "segments_2023": 390,
+      "checks_2023": "15/15",
+      "temporal_edges": 974,
+      "stgraph_status": "PASS"
+    },
+    "tile_00006": {
+      "coregistration": {
+        "translation_px": [
+          22.2,
+          20.54
+        ],
+        "tile_residual_px": [
+          -0.5,
+          -0.06
+        ],
+        "disagreement_with_aoi_px": 2.44
+      },
+      "release_2023": "v1",
+      "segments_2013": 485,
+      "checks_2013": "15/15",
+      "segments_2023": 383,
+      "checks_2023": "15/15",
+      "temporal_edges": 1015,
+      "stgraph_status": "PASS"
+    }
+  },
+  "strip": {
+    "stgraph_nodes": 7020,
+    "stgraph_edges": 27056,
+    "by_relation": {
+      "spatial_touches": 16873,
+      "temporal_overlap": 5767,
+      "spatial_near": 2266,
+      "temporal_identity": 1739,
+      "temporal_contained_in": 411
+    },
+    "status": "PASS",
+    "segments_2013": 3744,
+    "segments_2023": 3276
+  },
+  "gnn": {
+    "labelled": 3851,
+    "positives": 125,
+    "models": {
+      "mlp": {
+        "ap": 0.084,
+        "roc_auc": 0.734,
+        "precision": 0.161,
+        "recall": 0.28,
+        "f1": 0.204,
+        "tp": 35,
+        "fp": 183,
+        "fn": 90
+      },
+      "gnn_spatial": {
+        "ap": 0.1,
+        "roc_auc": 0.71,
+        "precision": 0.148,
+        "recall": 0.24,
+        "f1": 0.183,
+        "tp": 30,
+        "fp": 173,
+        "fn": 95
+      },
+      "gnn_full": {
+        "ap": 0.53,
+        "roc_auc": 0.906,
+        "precision": 0.507,
+        "recall": 0.6,
+        "f1": 0.549,
+        "tp": 75,
+        "fp": 73,
+        "fn": 50
+      }
+    },
+    "audit_agreement": {
+      "real": {
+        "n": 43,
+        "detected_by_gnn": 33,
+        "median_prob": 0.998
+      },
+      "unclear": {
+        "n": 2,
+        "detected_by_gnn": 0,
+        "median_prob": 0.08
+      },
+      "questionable": {
+        "n": 13,
+        "detected_by_gnn": 10,
+        "median_prob": 0.996
+      }
+    }
+  },
+  "strip_freeze": {
+    "status": "PASS",
+    "checks": {
+      "F1": "PASS",
+      "F2": "PASS",
+      "F3": "PASS",
+      "F4": "PASS",
+      "F5": "PASS"
+    }
+  }
+}

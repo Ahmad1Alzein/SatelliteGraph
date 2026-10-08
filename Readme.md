@@ -62,13 +62,15 @@ cross-tile reconciliation and graph combination.
 
 ## Selectable pipeline: old/new segmentation, graph and change detection
 
-The repository also contains the verified 2013–2023 thesis pipeline (`pipelines/experiment_2013_2023`).
+The repository also contains the verified 2013–2023 thesis pipeline (`pipelines/semantic_temporal`).
 `python -m src pipeline` runs either pipeline, one stage at a time or end to end:
 
 ```powershell
-python -m src pipeline run --segmentation new --graph new --change gnn --output artifactsuns
+python -m src pipeline run --segmentation new --graph new --change gnn --output artifacts
+uns
 ew_new_gnn
-python -m src pipeline run --segmentation old --graph old --change classical --output artifactsuns\old_old_classical `
+python -m src pipeline run --segmentation old --graph old --change classical --output artifacts
+uns\old_old_classical `
   --folders tiles17_233 tiles17_233 --register-images
 ```
 
