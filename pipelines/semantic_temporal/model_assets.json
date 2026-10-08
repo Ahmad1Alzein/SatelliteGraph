@@ -1,0 +1,71 @@
+{
+  "assets": [
+    {
+      "path": "semantic_temporal/DelineateAnythingv2.pt",
+      "repo": "MykolaL/DelineateAnything",
+      "revision": "46f98c05ece1d57047e36952a8b440583de38f0d",
+      "url": "https://huggingface.co/MykolaL/DelineateAnything/resolve/46f98c05ece1d57047e36952a8b440583de38f0d/DelineateAnythingv2.pt",
+      "size": 124747297,
+      "sha256": "46700b8a279b07922953a11adaeb5e658d9a2384b6334c8e0a3090886218915a",
+      "matches_experiment_reference": true,
+      "method": "new"
+    },
+    {
+      "path": "semantic_temporal/satlens-segformer/config.json",
+      "repo": "boehnen/satlens-segformer",
+      "revision": "19cdd879e535d76e7fcbbd1e8b54dac9c1da90d6",
+      "url": "https://huggingface.co/boehnen/satlens-segformer/resolve/19cdd879e535d76e7fcbbd1e8b54dac9c1da90d6/config.json",
+      "size": 1361,
+      "sha256": "f4592f62827cee9667d72c028dc7a1be8845c5793fcc9c235cd35455a7e1cb44",
+      "matches_experiment_reference": true,
+      "method": "new"
+    },
+    {
+      "path": "semantic_temporal/satlens-segformer/preprocessor_config.json",
+      "repo": "boehnen/satlens-segformer",
+      "revision": "19cdd879e535d76e7fcbbd1e8b54dac9c1da90d6",
+      "url": "https://huggingface.co/boehnen/satlens-segformer/resolve/19cdd879e535d76e7fcbbd1e8b54dac9c1da90d6/preprocessor_config.json",
+      "size": 372,
+      "sha256": "6073ac6a37530ed2a19443d6a748f5579887b3ae48f6730073954b0b38cf3fd6",
+      "matches_experiment_reference": true,
+      "method": "new"
+    },
+    {
+      "path": "semantic_temporal/satlens-segformer/model.safetensors",
+      "repo": "boehnen/satlens-segformer",
+      "revision": "19cdd879e535d76e7fcbbd1e8b54dac9c1da90d6",
+      "url": "https://huggingface.co/boehnen/satlens-segformer/resolve/19cdd879e535d76e7fcbbd1e8b54dac9c1da90d6/model.safetensors",
+      "size": 14891980,
+      "sha256": "68f1c70396d3e1b5a9b752408cadbafa90c655da816564ce7d9646b112392ac0",
+      "matches_experiment_reference": true,
+      "method": "new"
+    },
+    {
+      "path": "sam2/sam2.1_hiera_large.pt",
+      "method": "old",
+      "size": 898083611,
+      "sha256": "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318",
+      "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
+      "publisher": "Meta SAM 2",
+      "hash_source": "local existing asset, verified load compatibility; publisher does not publish checksum"
+    },
+    {
+      "path": "openearthmap/fasterseg/arch_1.pt",
+      "method": "old",
+      "size": 4751,
+      "sha256": "8e8a78306fb6e9852a11f504ea13511e6c94611dc174f8e3c8c5d49580a444bd",
+      "url": "https://drive.google.com/uc?export=download&id=12oDzi-sDnD_Y4CBONei_g2SZBMZ6cx-2",
+      "publisher": "OpenEarthMap lightweight models",
+      "hash_source": "local existing asset, verified load compatibility; publisher does not publish checksum"
+    },
+    {
+      "path": "openearthmap/fasterseg/weights1.pt",
+      "method": "old",
+      "size": 17850961,
+      "sha256": "7fc946103594e37da51cb8be87623acb0875059c979730564c5ea7da13507b39",
+      "url": "https://drive.google.com/uc?export=download&id=1BgCu1Rz2PvTPJzI_J97hNkr4HvlvI-pE",
+      "publisher": "OpenEarthMap lightweight models",
+      "hash_source": "local existing asset, verified load compatibility; publisher does not publish checksum"
+    }
+  ]
+}
