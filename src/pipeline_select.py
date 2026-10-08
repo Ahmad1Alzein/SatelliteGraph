@@ -1,20 +1,7 @@
-"""Selectable pipeline: segmentation (old | new) -> graph (old | new) -> change detection (classical | gnn).
+"""Selectable native pipelines with persisted options and explicit format adapters.
 
-old  = SatelliteGraph stages 2/2R (SAM 2.1 + OpenEarthMap) -> stages 3/4 (tile graphs, combined year graph)
-       -> stage 5 (temporal graph + classical change events)
-new  = pipelines/semantic_temporal (frozen object segmentation -> region/temporal/spatio-temporal graphs ->
-       rule-based "classical" change labels -> relational GNN), run through its own run_experiment.py
-
-Native combinations (the only ones accepted):
-  old -> old -> classical      new -> new -> classical      new -> new -> gnn
-Cross combinations need format adapters that do not exist yet and are refused with an explanation.
-
-Run folder layout (one folder per run; artifacts/ is git-ignored):
-  <output>/run.json              selections, per-stage status, inputs, git commit
-  old: <output>/annual_<year>/   stage2 (segmentation) + stage3/stage4 (graph), one per year
-       <output>/classical_old/   stage5 temporal graph, changes.geojson, report.json
-  new: <output>/work/            final_segmentation/ (segmentation), graphs/ (graph + classical change labels),
-                                 graphs/FROZEN_strip_tile_00000-00006_v1/gnn/ (GNN), REPRODUCTION_REPORT.md
+Both segmentation and graph methods accept metadata-based folders or individual
+images. Published-study reproduction remains available through run_experiment.py.
 """
 from __future__ import annotations
 
@@ -30,7 +17,7 @@ from src.pipeline_state import input_fingerprint, validate_resume
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "pipelines" / "semantic_temporal"
-NATIVE = {("old", "old", "classical"), ("new", "new", "classical"), ("new", "new", "gnn")}
+NATIVE = {(s,g,c) for s in ('old','new') for g in ('old','new') for c in ('classical','gnn')}
 NEW_GROUP = {"segmentation": "segmentation", "graph": "graph", "classical": "classical", "gnn": "gnn"}
 
 
@@ -38,6 +25,8 @@ def resolve_options(saved: dict, supplied: dict, *, initial: bool, project_root:
     """Only explicit invocation values override effective saved options."""
     explicit = {k: v for k, v in supplied.items() if v is not None}
     merged = {**saved, **explicit}
+    if explicit.get('checkpoints') is not None and explicit.get('semantic_models') is None:
+        merged['semantic_models']=explicit['checkpoints']
     if explicit.get("registration_json") is not None:
         merged["register_images"] = False
     elif explicit.get("register_images") is True:
@@ -46,9 +35,11 @@ def resolve_options(saved: dict, supplied: dict, *, initial: bool, project_root:
                 "checkpoints": project_root / "checkpoints/experiment_2013_2023",
                 "config": project_root / "config.yaml", "skip_input_check": False,
                 "register_images": False, "no_progress": False}
+    defaults.update(device='cpu',inference_window=512,inference_overlap=128,tta=True,
+                    semantic_models=project_root/'checkpoints/semantic_temporal')
     for key, value in defaults.items():
         merged.setdefault(key, value)
-    for key in ("data", "checkpoints", "config", "registration_json", "project_root"):
+    for key in ("data", "checkpoints", "config", "registration_json", "project_root", "semantic_models", "gnn_checkpoint"):
         if key in merged and not isinstance(merged[key], dict):
             p = Path(merged[key]).expanduser()
             merged[key] = str((p if p.is_absolute() else project_root / p).resolve())
@@ -60,15 +51,9 @@ def resolve_options(saved: dict, supplied: dict, *, initial: bool, project_root:
 
 
 def check_combination(segmentation: str | None, graph: str | None, change: str | None) -> None:
-    """Refuse combinations that are not native (partial selections are checked as far as they go)."""
-    if segmentation and graph and segmentation != graph:
-        raise ValueError(
-            f"{segmentation} segmentation -> {graph} graph is not supported: the graph builders read their own "
-            "segmentation format (old: 1.5 m stage-2R maps with 'unknown' and multi-part objects; new: validated "
-            "0.75 m single-region releases). A format adapter would be needed; use matching methods.")
-    if graph == "old" and change == "gnn":
-        raise ValueError("gnn change detection needs the new graph: the old graph has no node/edge feature tensors, "
-                         "and the GNN's pseudo-labels come from the new temporal layer. Use --change classical.")
+    """All eight combinations use explicit format adapters."""
+    for value,allowed in ((segmentation,('old','new')),(graph,('old','new')),(change,('classical','gnn'))):
+        if value is not None and value not in allowed: raise ValueError(f'Unknown pipeline method: {value}')
 
 
 # ----------------------------------------------------------------------------- run ledger
@@ -91,6 +76,8 @@ def _git_commit() -> str | None:
 
 def _start(output: Path, stage: str, method: str, options: dict) -> dict:
     state = _ledger(output)
+    from pipelines.semantic_temporal.runtime.runner import relocate_run
+    state=relocate_run(output,state)
     effective = resolve_options(state.get("options", {}), options, initial=not bool(state),
                                 project_root=Path(options.get("project_root") or REPO))
     fingerprint = input_fingerprint(effective)
@@ -108,6 +95,7 @@ def _start(output: Path, stage: str, method: str, options: dict) -> dict:
     state.setdefault("created", time.strftime("%Y-%m-%d %H:%M:%S"))
     state["git_commit"] = _git_commit()
     state["options"] = effective
+    state['output']=str(output)
     state["input_fingerprint"] = fingerprint
     for dependent in ({"segmentation": ("graph", "change"), "graph": ("change",)}.get(stage, ())):
         state.setdefault("stages", {}).pop(dependent, None)
@@ -188,7 +176,7 @@ def segment(method: str, output, **options) -> dict:
     state = _start(output, "segmentation", method, options)
     options = state["options"]
     try:
-        info = _run_new(output, "segmentation", options) if method == "new" else _run_old_annual(output, options, "segmentation")
+        info = _execute_stage(output,'segmentation',method,options,state)
     except Exception as exc:
         _fail(output, state, "segmentation", exc); raise
     return _finish(output, state, "segmentation", result=info)
@@ -199,7 +187,7 @@ def graph(method: str, output, **options) -> dict:
     state = _start(output, "graph", method, options)
     options = state["options"]
     try:
-        info = _run_new(output, "graph", options) if method == "new" else _run_old_annual(output, options, None)
+        info = _execute_stage(output,'graph',method,options,state)
     except Exception as exc:
         _fail(output, state, "graph", exc); raise
     return _finish(output, state, "graph", result=info)
@@ -211,19 +199,38 @@ def change(method: str, output, **options) -> dict:
     options = state["options"]
     graph_method = state["stages"]["graph"]["method"]
     try:
-        if graph_method == "new":
-            info = _run_new(output, method, options)       # 'classical' or 'gnn' (gnn runs classical first: its labels)
-        else:
-            info = _run_old_classical(output, options)
+        info = _execute_stage(output,'change',method,options,state)
     except Exception as exc:
         _fail(output, state, "change", exc); raise
-    return _finish(output, state, "change", result=info)
+    result=_finish(output,state,'change',result=info)
+    if info.get('status') in ('insufficient_data','training_only'):
+        state['stages']['change']['status']=info['status'];_save(output,state);result['status']=info['status']
+    return result
 
 
-def run(segmentation: str, graph_method: str, change_method: str, output, **options) -> dict:
+def _execute_stage(output,stage,method,options,state):
+    from pipelines.semantic_temporal.runtime.runner import execute_stage
+    return execute_stage(output,stage,method,options,state)
+
+
+def run(segmentation: str, graph_method: str, change_method: str, output, *, until='change',resume=False,**options) -> dict:
     if (segmentation, graph_method, change_method) not in NATIVE:
         check_combination(segmentation, graph_method, change_method)
         raise ValueError(f"unsupported combination {segmentation} -> {graph_method} -> {change_method}")
-    return {"segmentation": segment(segmentation, output, **options),
-            "graph": graph(graph_method, output),
-            "change": change(change_method, output)}
+    if until not in ('segmentation','graph','change'): raise ValueError('Unknown final pipeline stage')
+    output=Path(output).resolve();state=_ledger(output)
+    if resume:
+        from pipelines.semantic_temporal.runtime.runner import relocate_run
+        state=relocate_run(output,state)
+        effective=resolve_options(state.get('options',{}),options,initial=not bool(state),project_root=Path(options.get('project_root') or REPO))
+        validate_resume(state,'segmentation',input_fingerprint(effective))
+        downstream_changed=any(effective.get(k)!=state.get('options',{}).get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance'))
+        state['options']=effective;_save(output,state)
+    else: downstream_changed=False
+    results={}
+    for stage,method,execute in (('segmentation',segmentation,segment),('graph',graph_method,graph),('change',change_method,change)):
+        saved=state.get('stages',{}).get(stage,{})
+        if resume and saved.get('status')=='complete' and saved.get('method')==method and not (stage=='change' and downstream_changed): results[stage]=saved
+        else: results[stage]=execute(method,output,**options if stage=='segmentation' else {})
+        if stage==until: break
+    return results

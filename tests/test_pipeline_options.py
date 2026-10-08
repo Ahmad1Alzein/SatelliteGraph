@@ -6,7 +6,7 @@ from src import cli, pipeline_select as ps
 
 
 def test_separate_cli_stages_inherit_inputs_and_flags(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(ps, '_run_new', lambda out, until, opts: {'effective': opts})
+    monkeypatch.setattr(ps, '_execute_stage', lambda out, stage, method, opts, state: {'effective': opts})
     output = tmp_path / 'run'
     cli.main(['pipeline', 'segment', '--method', 'new', '--output', str(output),
               '--project-root', str(tmp_path), '--data', 'données with spaces',
@@ -27,7 +27,7 @@ def test_separate_cli_stages_inherit_inputs_and_flags(tmp_path, monkeypatch, cap
 
 
 def test_explicit_inverse_flags_override_saved_values(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(ps, '_run_new', lambda out, until, opts: {'effective': opts})
+    monkeypatch.setattr(ps, '_execute_stage', lambda out, stage, method, opts, state: {'effective': opts})
     cli.main(['pipeline', 'segment', '--method', 'new', '--output', str(tmp_path),
               '--skip-input-check', '--no-progress'])
     cli.main(['pipeline', 'graph', '--method', 'new', '--output', str(tmp_path),
@@ -37,12 +37,7 @@ def test_explicit_inverse_flags_override_saved_values(tmp_path, monkeypatch, cap
     assert received['no_progress'] is False
 
 
-def test_registration_override_clears_inherited_alternative(tmp_path, monkeypatch):
-    monkeypatch.setattr(ps, '_run_old_annual', lambda *a: {})
-    monkeypatch.setattr(ps, '_run_old_classical', lambda out, opts: {'effective': opts})
-    ps.segment('old', tmp_path, folders=['a/2017', 'b/2023'], register_images=True)
-    ps.graph('old', tmp_path)
-    ps.change('classical', tmp_path, registration_json=tmp_path / 'controls.json')
-    options = json.loads((tmp_path / 'run.json').read_text())['options']
+def test_registration_override_clears_inherited_alternative(tmp_path):
+    options=ps.resolve_options({'register_images':True},{'registration_json':tmp_path/'controls.json'},initial=False,project_root=tmp_path)
     assert options['register_images'] is False
-    assert options['registration_json'] == str(tmp_path / 'controls.json')
+    assert options['registration_json']==str(tmp_path/'controls.json')

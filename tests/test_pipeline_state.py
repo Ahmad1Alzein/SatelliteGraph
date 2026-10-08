@@ -5,7 +5,7 @@ from src import pipeline_select as ps
 
 
 def test_changed_input_rejects_resume(tmp_path, monkeypatch):
-    monkeypatch.setattr(ps, '_run_new', lambda *a: {})
+    monkeypatch.setattr(ps, '_execute_stage', lambda *a: {})
     data = tmp_path / 'data'; data.mkdir()
     image = data / 'tile.png'; image.write_bytes(b'original pixels')
     ps.segment('new', tmp_path / 'run', data=data)
@@ -15,10 +15,10 @@ def test_changed_input_rejects_resume(tmp_path, monkeypatch):
 
 
 def test_graph_failure_invalidates_completed_change(tmp_path, monkeypatch):
-    monkeypatch.setattr(ps, '_run_new', lambda *a: {})
+    monkeypatch.setattr(ps, '_execute_stage', lambda *a: {})
     ps.run('new', 'new', 'classical', tmp_path)
     def fail(*args): raise RuntimeError('broken graph')
-    monkeypatch.setattr(ps, '_run_new', fail)
+    monkeypatch.setattr(ps, '_execute_stage', fail)
     with pytest.raises(RuntimeError): ps.graph('new', tmp_path)
     state = json.loads((tmp_path / 'run.json').read_text())
     assert state['stages']['graph']['status'] == 'failed'

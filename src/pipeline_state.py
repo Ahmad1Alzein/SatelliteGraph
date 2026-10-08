@@ -16,11 +16,12 @@ def stage_fingerprint(inputs: list[Path], settings: dict) -> str:
 
 def input_fingerprint(options: dict) -> str:
     keys = ('folders', 'images', 'years', 'data', 'metadata', 'source_rasters',
-            'checkpoints', 'config', 'pixel_size', 'processing_scale', 'target_resolution')
+            'checkpoints', 'semantic_models','config','old_config','pixel_size','processing_scale','target_resolution',
+            'target_crs','registration_json','register_images','inference_window','inference_overlap','tta')
     settings = {k: options[k] for k in keys if options.get(k) is not None}
     files = []
     for key, value in settings.items():
-        if key == 'years' or isinstance(value, dict) or key in ('pixel_size', 'processing_scale', 'target_resolution'):
+        if key == 'years' or isinstance(value, dict) or key in ('pixel_size','processing_scale','target_resolution','target_crs','register_images','inference_window','inference_overlap','tta'):
             continue
         for item in value if isinstance(value, list) else [value]:
             if item is None: continue

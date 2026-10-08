@@ -15,64 +15,31 @@ from src import pipeline_select as ps
 
 @pytest.fixture
 def fakes(monkeypatch):
-    calls = []
-    monkeypatch.setattr(ps, "_run_new", lambda out, until, opts: calls.append(("new", until)) or {"work": str(out / "work")})
-    monkeypatch.setattr(ps, "_run_old_annual", lambda out, opts, stop: calls.append(("old_annual", stop)) or {"annual": {}})
-    monkeypatch.setattr(ps, "_run_old_classical", lambda out, opts: calls.append(("old_classical", None)) or {"status": "complete"})
+    calls=[]
+    monkeypatch.setattr(ps,'_execute_stage',lambda out,stage,method,options,state:calls.append((stage,method)) or {'effective':options})
     return calls
 
 
-@pytest.mark.parametrize("combo", sorted(ps.NATIVE))
-def test_native_combinations_run_in_order(tmp_path, fakes, combo):
-    seg, graph, change = combo
-    result = ps.run(seg, graph, change, tmp_path / "run", folders=["a/2013", "b/2023"])
-    assert set(result) == {"segmentation", "graph", "change"}
-    expected = {("new", "new", "gnn"): [("new", "segmentation"), ("new", "graph"), ("new", "gnn")],
-                ("new", "new", "classical"): [("new", "segmentation"), ("new", "graph"), ("new", "classical")],
-                ("old", "old", "classical"): [("old_annual", "segmentation"), ("old_annual", None), ("old_classical", None)]}[combo]
-    assert fakes == expected
-    ledger = json.loads((tmp_path / "run" / "run.json").read_text())
-    assert [ledger["stages"][s]["status"] for s in ("segmentation", "graph", "change")] == ["complete"] * 3
-    assert [ledger["stages"][s]["method"] for s in ("segmentation", "graph", "change")] == list(combo)
+@pytest.mark.parametrize('combo',sorted(ps.NATIVE))
+def test_all_combinations_run_in_order(tmp_path,fakes,combo):
+    result=ps.run(*combo,tmp_path/'run',folders=['a/2017','b/2023'])
+    assert list(result)==['segmentation','graph','change']
+    assert fakes==list(zip(('segmentation','graph','change'),combo))
+    state=json.loads((tmp_path/'run/run.json').read_text())
+    assert all(v['status']=='complete' for v in state['stages'].values())
 
 
-@pytest.mark.parametrize("combo", [("old", "new", "classical"), ("new", "old", "classical"), ("old", "old", "gnn"),
-                                   ("new", "old", "gnn"), ("old", "new", "gnn")])
-def test_non_native_combinations_are_refused_before_running(tmp_path, fakes, combo):
-    with pytest.raises(ValueError):
-        ps.run(*combo, tmp_path / "run")
-    assert fakes == [] and not (tmp_path / "run").exists()
+def test_stages_require_their_predecessor(tmp_path,fakes):
+    with pytest.raises(ValueError,match='segmentation'): ps.graph('new',tmp_path/'run')
+    ps.segment('new',tmp_path/'run')
+    with pytest.raises(ValueError,match='graph'): ps.change('gnn',tmp_path/'run')
 
 
-def test_stages_require_their_predecessor(tmp_path, fakes):
-    with pytest.raises(ValueError, match="segmentation"):
-        ps.graph("new", tmp_path / "run")
-    ps.segment("new", tmp_path / "run")
-    with pytest.raises(ValueError, match="graph"):
-        ps.change("gnn", tmp_path / "run")
-
-
-def test_graph_method_must_match_segmentation(tmp_path, fakes):
-    ps.segment("old", tmp_path / "run", folders=["a/2013", "b/2023"])
-    with pytest.raises(ValueError, match="not supported"):
-        ps.graph("new", tmp_path / "run")
-
-
-def test_old_graph_refuses_gnn(tmp_path, fakes):
-    ps.segment("old", tmp_path / "run", folders=["a/2013", "b/2023"])
-    ps.graph("old", tmp_path / "run")
-    with pytest.raises(ValueError, match="gnn change detection needs the new graph"):
-        ps.change("gnn", tmp_path / "run")
-
-
-def test_failed_stage_is_recorded(tmp_path, monkeypatch):
-    def boom(out, until, opts):
-        raise RuntimeError("stage did not complete")
-    monkeypatch.setattr(ps, "_run_new", boom)
-    with pytest.raises(RuntimeError):
-        ps.segment("new", tmp_path / "run")
-    ledger = json.loads((tmp_path / "run" / "run.json").read_text())
-    assert ledger["stages"]["segmentation"]["status"] == "failed"
+def test_failed_stage_is_recorded(tmp_path,monkeypatch):
+    def boom(*args): raise RuntimeError('stage did not complete')
+    monkeypatch.setattr(ps,'_execute_stage',boom)
+    with pytest.raises(RuntimeError): ps.segment('new',tmp_path/'run')
+    assert json.loads((tmp_path/'run/run.json').read_text())['stages']['segmentation']['status']=='failed'
 
 
 def test_old_pipeline_needs_two_year_folders():
@@ -95,7 +62,7 @@ def test_cli_dispatches_to_selector(tmp_path, fakes, capsys):
     cli.main(["pipeline", "run", "--segmentation", "new", "--graph", "new", "--change", "classical",
               "--output", str(tmp_path / "run"), "--project-root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
-    assert out["change"]["method"] == "classical" and fakes[-1] == ("new", "classical")
+    assert out["change"]["method"] == "classical" and fakes[-1] == ("change", "classical")
 
 
 def test_experiment_package_is_complete():

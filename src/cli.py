@@ -269,18 +269,32 @@ def _add_pipeline_parser(commands) -> None:
     def common(p):
         p.add_argument("--output", required=True, help="Run folder, e.g. artifacts/runs/<name> (one folder per run)")
         p.add_argument("--project-root", default=".")
-        new = p.add_argument_group("new pipeline inputs (pipelines/experiment_2013_2023)")
+        new = p.add_argument_group("semantic temporal model inputs")
         new.add_argument("--data", default=None, help="Folder with dataset/ and aligned/")
         new.add_argument("--checkpoints", default=None,
                          help="Folder with satlens-segformer/ and DelineateAnythingv2.pt")
         new.add_argument("--skip-input-check", action=argparse.BooleanOptionalAction, default=None,
                          help="Allow inputs other than the reference dataset")
-        old = p.add_argument_group("old pipeline inputs (SatelliteGraph stages 2-5)")
-        old.add_argument("--folders", nargs=2, default=None, metavar=("EARLIER", "LATER"),
-                         help="Two tile folders (PNG + metadata.csv + source GeoTIFF), earlier year first")
-        old.add_argument("--years", nargs=2, type=int, default=None, help="Years of --folders (default: folder names)")
-        old.add_argument("--source-rasters", nargs=2, default=None, help="GeoTIFFs if not beside the PNG tiles")
-        old.add_argument("--metadata", nargs=2, default=None, help="Tile offset CSVs if not beside the PNG tiles")
+        old = p.add_argument_group("shared inputs for both methods")
+        inputs=old.add_mutually_exclusive_group()
+        inputs.add_argument("--folders", nargs='+', default=None, help="One or two metadata-based image folders, earlier year first")
+        inputs.add_argument("--images", nargs='+', default=None, help="One or two individual PNGs with placement metadata, or georeferenced RGB GeoTIFFs")
+        old.add_argument("--years", nargs='+', type=int, default=None, help="One year per input (default: folder names)")
+        old.add_argument("--source-rasters", nargs='+', default=None, help="One source GeoTIFF per input")
+        old.add_argument("--metadata", nargs='+', default=None, help="One placement CSV per input")
+        old.add_argument("--pixel-size", nargs='+', type=float, default=None, help="Physical metres per original pixel when no CRS is available")
+        old.add_argument("--device", choices=('cpu','cuda','auto'),default=None)
+        old.add_argument("--semantic-models",default=None)
+        old.add_argument("--gnn-checkpoint",default=None)
+        old.add_argument("--target-crs",default=None)
+        old.add_argument("--target-resolution",type=float,default=None)
+        old.add_argument("--inference-window",type=int,default=None)
+        old.add_argument("--inference-overlap",type=int,default=None)
+        old.add_argument("--tta",action=argparse.BooleanOptionalAction,default=None)
+        old.add_argument("--max-pixels",type=int,default=None)
+        old.add_argument("--max-comparison-pixels",type=int,default=None)
+        old.add_argument("--gnn-epochs",type=int,default=None)
+        old.add_argument("--gnn-hidden",type=int,default=None)
         reg = old.add_mutually_exclusive_group()
         reg.add_argument("--registration-json", default=None, help="Cross-year control points (old classical)")
         reg.add_argument("--register-images", action=argparse.BooleanOptionalAction, default=None,
@@ -303,6 +317,8 @@ def _add_pipeline_parser(commands) -> None:
     run.add_argument("--segmentation", required=True, choices=("old", "new"))
     run.add_argument("--graph", required=True, choices=("old", "new"))
     run.add_argument("--change", required=True, choices=("classical", "gnn"))
+    run.add_argument('--until',choices=('segmentation','graph','change'),default='change')
+    run.add_argument('--resume',action='store_true')
     common(run)
 
 
@@ -470,15 +486,18 @@ def main(argv: list[str] | None = None) -> None:
                 "data": resolve(args.data), "checkpoints": resolve(args.checkpoints),
                 "skip_input_check": args.skip_input_check,
                 "folders": [resolve(f) for f in args.folders] if args.folders else None, "years": args.years,
+                "images": [resolve(f) for f in args.images] if args.images else None,
                 "source_rasters": [resolve(f) for f in args.source_rasters] if args.source_rasters else None,
                 "metadata": [resolve(f) for f in args.metadata] if args.metadata else None,
                 "registration_json": resolve(args.registration_json), "register_images": args.register_images,
                 "boundary_tolerance": args.boundary_tolerance, "config": resolve(args.config),
                 "no_progress": args.no_progress,
             }
+            for key in ('pixel_size','device','semantic_models','gnn_checkpoint','target_crs','target_resolution','inference_window','inference_overlap','tta','max_pixels','max_comparison_pixels','gnn_epochs','gnn_hidden'):
+                options[key]=getattr(args,key)
             output = resolve(args.output)
             if args.phase == "run":
-                result = ps.run(args.segmentation, args.graph, args.change, output, **options)
+                result = ps.run(args.segmentation, args.graph, args.change, output, until=args.until,resume=args.resume,**options)
             else:
                 result = getattr(ps, args.phase)(args.method, output, **options)
         else:  # pragma: no cover - argparse restricts the available stages.
