@@ -20,7 +20,7 @@ Crops came from the actual 2017 and 2023 selection rasters, at original offsets 
 
 The unequal case uses test labels 2018/2024 for the same 2017/2023 source imagery; these labels test year independence, not new acquisition dates. Its second later crop starts at (192,128). Areas and distances are recorded in metres, and overlap ownership is explicit.
 
-The new pair was segmented first, then graph and change were run in separate native CLI processes with only method/output supplied. Saved paths, CPU/window/overlap/TTA settings persisted. The small new runs use window 64, overlap 16, TTA off. The old smoke uses the actual models with one SAM sampling point, no crop layer, FasterSeg input size 64 and TTA off; this verifies compatibility, not default-setting accuracy. Two-year previews were inspected visually.
+The new pair was segmented first, then graph and change were run in separate native CLI processes with only method/output supplied. Saved paths, CPU/window/overlap/TTA settings persisted. The small new runs use window 64, overlap 16, TTA off. The old smoke uses the actual models with one SAM sampling point, no crop layer, FasterSeg input size 64 and TTA off; this verifies compatibility, not default-setting accuracy. Two-year previews were inspected visually. After review fixes, fresh runs `new_pair_final` and `old_pair_final` also passed: new stage times 36/5/4 seconds; old 52/5/4 seconds. Both contexts record all seven model files, and the completed new pair resumed with hash verification and no repeated stages.
 
 The real pair exposed an invalid-border evidence slicing bug caused by resampling; a failing regression reproduced it and passed after source/destination clipping was added.
 
@@ -28,10 +28,12 @@ The real pair exposed an invalid-border evidence slicing bug caused by resamplin
 
 The pre-change baseline passed 270 tests and 114 subtests. New targeted checks cover input placement/masks, shared grids, real model inference, adapters, both graph methods, ownership, evidence/roof shifts, unknown/missing coverage gates, all eight selections, saved options, moved outputs, interrupted resume, stage-method changes and hash tampering. Deterministic staged and one-pass graph tensors match. GNN tests cover insufficient labels, training-only status, saved weights, independent groups and training-only normalization.
 
-The full suite passed 322 tests and 114 subtests in 216.20 seconds, with one pre-existing Rasterio georeferencing warning. Two additionally added staged/resume checks passed separately (20.91 seconds). Original algorithms/reference files: all 37 files remain byte-identical to the baseline after the package rename.
+The first full implementation suite passed 322 tests and 114 subtests in 216.20 seconds. After independent review fixes, a further full suite passed 343 tests and 114 subtests in 285.19 seconds. Both reported the same pre-existing Rasterio warning. The final complete tree passed 346 tests and 114 subtests in 193.88 seconds, including real semantic CPU inference, with the same single existing warning. Known-shift current-image registration and connected building-extension checks also pass. Original algorithms/reference files: all 37 files remain byte-identical to the baseline after the package rename.
 
 ## Practical limits
 
 Full published 2013-2023 reproduction is unverified: original inputs and the recorded GDAL environment are absent. General runs never import its historic shifts, audits or expected scores. Real crop validation checks execution and artifact integrity; it does not establish segmentation/change accuracy on arbitrary imagery.
 
 PNG placement metadata is required. Metric new segmentation requires physical scale. Cross-year inputs without a CRS require explicit or estimated registration. Missing coverage and unknown observations cannot become confident change labels. Explicit per-tile and comparison-mosaic memory budgets remain; use spatial subsets for large/gapped inputs. GNN evaluation requires sufficient labels and independent spatial groups. A single pair does not establish a held-out accuracy score.
+
+The [final review record](pipeline-review.md) lists every confirmed defect, its regression and the execution rulings. New evidence fields use earlier/later names; tree/road change regions and JSON reports agree; construction targets require later-year building endpoints. Model, metadata, source and saved-GNN content changes are fingerprinted or verified before reuse.

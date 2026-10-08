@@ -172,7 +172,8 @@ def combine_year_graphs(graphs,context):
         result=SimpleNamespace(graph=old['graph'],edges=old['edges'])
         tiles.append(_TileInput(key,result,graph.directory,labels,confidence,{n['instance_id']:n for n in old['nodes']},x,y,labels.shape[1],labels.shape[0],np.ones(labels.shape,bool)))
         inputs[key]=(artifact,classes,prob)
-    cfg=select_stage4_config(load_config());matches=_overlap_candidates(tiles,cfg['overlap']);union,accepted=_resolve_matches(tiles,matches);_assign_ownership(tiles)
+    from .context import old_configuration
+    cfg=select_stage4_config(old_configuration(context));matches=_overlap_candidates(tiles,cfg['overlap']);union,accepted=_resolve_matches(tiles,matches);_assign_ownership(tiles)
     old_nodes,geoms,roots,dropped=_build_combined_nodes(tiles,union,str(graphs[0].year))
     old_edges=_build_combined_edges(old_nodes,geoms,tiles,union,roots)
     old={'schema_version':SCHEMA_VERSION,'graph':_graph_metadata(tiles,old_nodes,old_edges,str(graphs[0].year),cfg,accepted_count=accepted),'nodes':old_nodes,'edges':old_edges}

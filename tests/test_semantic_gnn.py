@@ -32,6 +32,46 @@ def test_no_positive_targets_returns_counts_and_no_predictions(tmp_path):
     assert result['predictions'] is None
 
 
+def test_validation_detects_deleted_gnn_predictions(tmp_path):
+    from pathlib import Path
+    from pipelines.semantic_temporal.runtime.temporal import detect_classical
+    from pipelines.semantic_temporal.runtime.gnn import run_gnn
+    from pipelines.semantic_temporal.runtime.visualization import validate_run
+    artifact,context=temporal_fixture(tmp_path);detect_classical(artifact,context)
+    result=run_gnn(artifact,replace(context,options={'gnn_epochs':1,'gnn_hidden':8}))
+    validate_run(context,'change')
+    Path(result['predictions']).unlink()
+    with pytest.raises(ValueError,match='changed|missing'): validate_run(context,'change')
+
+
+def test_target_csv_cannot_train_nonbuilding_nodes(tmp_path):
+    from pipelines.semantic_temporal.runtime.gnn import run_gnn
+    artifact,context=temporal_fixture(tmp_path)
+    nodes=read_json(artifact.paths['graph'])['nodes']
+    tree=next(n for n in nodes if n['class_id']==3)
+    building=next(n for n in nodes if n['class_id']==1)
+    pd.DataFrame([{'gid':tree['id'],'label':1,'confidence':1,'source':'rule'},
+                  {'gid':building['id'],'label':0,'confidence':1,'source':'rule'}]).to_csv(artifact.paths['targets'],index=False)
+    report=run_gnn(artifact,replace(context,options={'gnn_epochs':1,'gnn_hidden':8}))
+    assert report['status']=='insufficient_data' and report['positive_targets']==0
+
+
+def test_external_inference_checkpoint_is_verified_with_output(tmp_path):
+    from pathlib import Path
+    import shutil
+    from pipelines.semantic_temporal.runtime.temporal import detect_classical
+    from pipelines.semantic_temporal.runtime.gnn import run_gnn
+    from pipelines.semantic_temporal.runtime.storage import verify_manifest
+    artifact,context=temporal_fixture(tmp_path);detect_classical(artifact,context)
+    trained=run_gnn(artifact,replace(context,options={'gnn_epochs':1,'gnn_hidden':8}))
+    external=tmp_path/'external.pt'
+    for src,dst in ((Path(trained['checkpoint']),external),(Path(trained['checkpoint']).with_suffix('.json'),external.with_suffix('.json'))): shutil.copyfile(src,dst)
+    inferred=run_gnn(artifact,context,checkpoint=external);directory=Path(inferred['predictions']).parent
+    verify_manifest(directory)
+    external.write_bytes(b'changed external weights')
+    with pytest.raises(ValueError,match='changed|missing'): verify_manifest(directory)
+
+
 def test_overlapping_input_observations_share_evaluation_group(tmp_path):
     from tests.semantic_fixtures import make_year
     from pipelines.semantic_temporal.runtime.context import build_context

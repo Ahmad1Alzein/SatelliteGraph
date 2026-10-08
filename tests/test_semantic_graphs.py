@@ -45,6 +45,21 @@ def test_overlap_is_owned_once_with_members_and_schema_validation(tmp_path):
     validate_combined_graph(read_json(combined.paths['old_contract']))
 
 
+def test_annual_overlap_uses_saved_custom_config(tmp_path,monkeypatch):
+    from pipelines.semantic_temporal.runtime.graphs import build_tile_graph,combine_year_graphs
+    from src.config import load_config
+    import src.stage4.pipeline as stage4
+    config=load_config();config['stage4']['overlap']['minimum_intersection_over_union']=.91
+    context=RunContext(tmp_path/'run',(),{'old_config':config},{},'fixture')
+    artifact=make_artifact(tmp_path/'inputs',np.ones((5,7),np.int32))
+    graph=build_tile_graph(artifact,'old',context);original=stage4._overlap_candidates;seen=[]
+    def capture(tiles,policy):
+        seen.append(policy['minimum_intersection_over_union']);return original(tiles,policy)
+    monkeypatch.setattr(stage4,'_overlap_candidates',capture)
+    combine_year_graphs([graph],context)
+    assert seen==[.91]
+
+
 def test_original_pixels_unknown_one_node_and_no_fake_metres(tmp_path):
     from pipelines.semantic_temporal.runtime.graphs import build_tile_graph
     labels=np.ones((2,3),np.int32);artifact=make_artifact(tmp_path/'inputs',labels,np.zeros_like(labels,np.uint8),units='pixels',x=4)

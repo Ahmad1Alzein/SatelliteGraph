@@ -70,6 +70,7 @@ def execute_stage(output,stage,method,options,state):
             info=run_gnn(temporal,context,checkpoint=options.get('gnn_checkpoint'))
         else: info={'status':'complete','report':str(temporal.directory/'classical_changes.json'),'years':classical['years']}
         info['artifacts']=[str(temporal.directory/'artifact.json')]
+        if method=='gnn': info['artifacts'].append(str(temporal.directory/'gnn/artifact.json'))
     validate_run(context,stage);render_outputs(context,stage);return info
 
 

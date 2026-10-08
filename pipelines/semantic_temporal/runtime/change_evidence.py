@@ -31,7 +31,7 @@ class EvidenceRules:
         return ndimage.maximum_filter(prob_max, size=w) <= self.params['ABSENT']
 
     def roof_remap(self, arr, fdy, fdx, nearest=False):
-        """Sample a 2013 array at q - d(q): moves 2013 roofs into the 2023 roof frame."""
+        """Sample earlier evidence at q - d(q), into the later roof frame."""
         h, w = arr.shape
         yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
         map_x = (xx - fdx[None, :]).astype(np.float32)
@@ -84,7 +84,7 @@ class EvidenceRules:
             reliable = node.area_m2 >= P['reliable_min_m2'] and node.mean_conf >= P['reliable_min_conf']
             need = P['new_building_high_m2'] if status == 'new_building' else P['extension_high_m2']
             confidence = '' if status == 'unchanged' else 'high' if reliable and g >= need else 'low'
-            rows23.append({'node_id': int(nid), 'object_type': 'building', 'change': status, 'confidence': confidence, 'new_area_m2': round(g, 1), 'area_m2': round(area, 1), 'p2013_building_max': round(float(b13_max_al[m].mean()), 3), 'p2023_building': round(float(ev23['building_2x'][m].mean()), 3), 'reliability': 'high' if reliable else 'low'})
+            rows23.append({'node_id': int(nid), 'object_type': 'building', 'change': status, 'confidence': confidence, 'new_area_m2': round(g, 1), 'area_m2': round(area, 1), 'earlier_building_max': round(float(b13_max_al[m].mean()), 3), 'later_building': round(float(ev23['building_2x'][m].mean()), 3), 'reliability': 'high' if reliable else 'low'})
         for nid in n13.index[n13.object_type == 'building']:
             m = lab13_al == nid
             if not m.any():
@@ -97,7 +97,7 @@ class EvidenceRules:
                 change[m & (change == 0)] = CODES['demolished']
             node = n13.loc[nid]
             reliable = node.area_m2 >= P['reliable_min_m2'] and node.mean_conf >= P['reliable_min_conf']
-            rows13.append({'node_id': int(nid), 'object_type': 'building', 'change': status, 'confidence': 'unverified' if status != 'unchanged' else '', 'lost_area_m2': round(l, 1), 'area_m2': round(area, 1), 'p2013_building': round(float(b13_2x_al[m].mean()), 3), 'p2023_building_max': round(float(ev23['building_max'][m].mean()), 3), 'reliability': 'high' if reliable else 'low'})
+            rows13.append({'node_id': int(nid), 'object_type': 'building', 'change': status, 'confidence': 'unverified' if status != 'unchanged' else '', 'lost_area_m2': round(l, 1), 'area_m2': round(area, 1), 'earlier_building': round(float(b13_2x_al[m].mean()), 3), 'later_building_max': round(float(ev23['building_max'][m].mean()), 3), 'reliability': 'high' if reliable else 'low'})
         near_b = ndimage.binary_dilation(is_b13 | is_b23 | is_b13_al, iterations=P['building_buffer_px']) | dark23 | dark13
         smooth = lambda a: ndimage.uniform_filter(a, size=self.params["absent_window_px"])
         t13, t23 = (smooth(ev13['tree_2x']), smooth(ev23['tree_2x']))

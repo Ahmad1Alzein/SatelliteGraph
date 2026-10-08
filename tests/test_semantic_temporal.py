@@ -47,6 +47,10 @@ def test_old_graph_uses_existing_classical_event_engine(tmp_path):
     artifact,context=temporal_fixture(tmp_path,'old');result=detect_classical(artifact,context)
     assert result['engine']=='stage5_classical'
     assert any(event['relation']=='constructed' for event in result['events'])
+    nodes={n['id']:n for n in read_json(artifact.paths['graph'])['nodes']}
+    for row in result['node_changes']:
+        if row['label'] is not None: assert nodes[row['gid']]['class_id']==1
+        if row['label']==1: assert row['year']==2023
 
 
 def test_evidence_clips_invalid_border_outside_observed_mosaic(tmp_path):
@@ -59,6 +63,53 @@ def test_evidence_clips_invalid_border_outside_observed_mosaic(tmp_path):
     graphs=tuple(combine_year_graphs([build_tile_graph(a,'new',context)],context) for a in artifacts)
     report=detect_classical(build_temporal_graph(graphs,context),context)
     assert report['status']=='complete'
+
+
+def test_tree_gain_raster_and_json_events_agree(tmp_path):
+    from pipelines.semantic_temporal.runtime.graphs import build_tile_graph,combine_year_graphs
+    from pipelines.semantic_temporal.runtime.temporal import build_temporal_graph,detect_classical
+    context=RunContext(tmp_path/'run',(),{}, {},'fixture')
+    labels=np.ones((20,30),np.int32)
+    artifacts=[make_artifact(tmp_path/'inputs',labels,np.full(labels.shape,klass,np.uint8),year=y)
+               for y,klass in ((2017,6),(2023,3))]
+    graphs=tuple(combine_year_graphs([build_tile_graph(a,'new',context)],context) for a in artifacts)
+    report=detect_classical(build_temporal_graph(graphs,context),context)
+    assert any(e['relation']=='tree_gain' for e in report['events'])
+    assert next(r for r in report['node_changes'] if r['year']==2023)['event']=='tree_gain'
+    assert all(r['event']!='persistent' for r in report['node_changes'])
+
+
+def test_old_classical_uses_explicit_boundary_tolerance(tmp_path,monkeypatch):
+    from dataclasses import replace
+    from pipelines.semantic_temporal.runtime.temporal import detect_classical
+    import src.stage5.events as events
+    artifact,context=temporal_fixture(tmp_path,'old');original=events.detect_change_events;seen=[]
+    def capture(*args):
+        seen.append(args[-1].boundary_tolerance_m);return original(*args)
+    monkeypatch.setattr(events,'detect_change_events',capture)
+    detect_classical(artifact,replace(context,options={'boundary_tolerance':7.5}))
+    assert seen==[7.5]
+
+
+def test_evidence_field_names_are_year_independent(tmp_path):
+    from pipelines.semantic_temporal.runtime.temporal import detect_classical
+    artifact,context=temporal_fixture(tmp_path)
+    report=detect_classical(artifact,context)
+    assert all(not any('2013' in key or '2023' in key for key in row.get('evidence',{})) for row in report['node_changes'])
+
+
+def test_connected_building_extension_keeps_construction_target(tmp_path):
+    from pipelines.semantic_temporal.runtime.graphs import build_tile_graph,combine_year_graphs
+    from pipelines.semantic_temporal.runtime.temporal import build_temporal_graph,detect_classical
+    context=RunContext(tmp_path/'run',(),{}, {},'fixture')
+    before=np.ones((20,30),np.int32);before[:,15:]=2
+    earlier_classes=np.where(before==1,1,6).astype(np.uint8)
+    later=np.ones_like(before)
+    artifacts=[make_artifact(tmp_path/'inputs',before,earlier_classes,year=2017),
+               make_artifact(tmp_path/'inputs',later,np.ones_like(later,dtype=np.uint8),year=2023)]
+    graphs=tuple(combine_year_graphs([build_tile_graph(a,'new',context)],context) for a in artifacts)
+    report=detect_classical(build_temporal_graph(graphs,context),context)
+    assert any(r['year']==2023 and r['event']=='extension' and r['label']==1 for r in report['node_changes'])
 
 
 def test_new_building_correspondence_compensates_current_roof_displacement(tmp_path):

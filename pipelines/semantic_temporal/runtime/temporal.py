@@ -64,8 +64,9 @@ def build_temporal_graph(graphs,context):
     edges=[]
     if graphs[0].method=='old':
         from src.stage5.matching import match_snapshots,MatchPolicy
+        from .context import old_configuration
         documents=[read_json(g.paths['old_contract']) for g in graphs]
-        matched=match_snapshots(documents[0],documents[1],polygons[0],polygons[1],MatchPolicy())
+        matched=match_snapshots(documents[0],documents[1],polygons[0],polygons[1],MatchPolicy(**old_configuration(context).get('stage5',{}).get('matching',{})))
         for link in matched['links']:
             a,b=docs[0]['nodes'][link['i']],docs[1]['nodes'][link['j']]
             edges.append({'source':a['id'],'target':b['id'],'relation':link['relation'],**link['evidence']})
@@ -165,15 +166,20 @@ def detect_classical(graph,context):
     source={n['id']:n for n in nodes};events=[];changes=[];units=document['units']
     if method=='old' and units!='pixels':
         from src.stage5.events import detect_change_events,ChangePolicy
+        from .context import old_configuration
+        settings=dict(old_configuration(context).get('stage5',{}).get('changes',{}))
+        if context.options.get('boundary_tolerance') is not None: settings['boundary_tolerance_m']=context.options['boundary_tolerance']
         observations=[_observations({'nodes':v}) for v in (earlier,later)]
-        events_result=detect_change_events(observations[0],observations[1],[shape(n['geometry']) for n in earlier],[shape(n['geometry']) for n in later],ChangePolicy())
+        events_result=detect_change_events(observations[0],observations[1],[shape(n['geometry']) for n in earlier],[shape(n['geometry']) for n in later],ChangePolicy(**settings))
         events=events_result['events'];by_node={}
         for event in events:
             if event['class_id']==7:
                 for ident in event['target_node_ids']+event['source_node_ids']: by_node.setdefault(ident,[]).append(event)
         for node in nodes:
             candidates=by_node.get(node['id'],[])
-            positive=next((e for e in candidates if e['relation'] in ('constructed','expanded')),None)
+            positive=next((e for e in candidates if e['relation'] in ('constructed','expanded')
+                           and node['class_id']==1 and node['year']==years[1]
+                           and node['id'] in e['target_node_ids']),None)
             persistent=next((e for e in candidates if e['relation']=='persisted'),None)
             event='new_building' if positive and positive['relation']=='constructed' else 'extension' if positive else 'persistent' if persistent else 'unexplained_no_evidence'
             changes.append({'gid':node['id'],'year':node['year'],'event':event,'label':1 if positive else 0 if persistent and node['class_id']==1 else None,'confidence':node['confidence'],'source':'stage5_classical_rule'})
@@ -197,6 +203,19 @@ def detect_classical(graph,context):
         change_map,after,before=EvidenceRules(resolution**2).detect(ev_a,ev_b,a,tables[0],b,tables[1],dy,dx,rgb_a,rgb_b)
         common=(a>0)&(b>0);change_map[~common]=0
         write_raster(graph.directory/'change_map.tif',change_map,grid,nodata=0)
+        # Persist every named raster event, including non-building rules whose
+        # detector does not return a per-node evidence table.
+        from rasterio.features import shapes
+        from .change_evidence import CODES
+        for relation,code in CODES.items():
+            region=change_map==code
+            for geometry,value in shapes(region.astype(np.uint8),mask=region,transform=affine):
+                if not value: continue
+                polygon=shape(geometry)
+                events.append({'event_id':f'{years[0]}:{years[1]}:{relation}:{len(events)}',
+                               'relation':relation,'source_year':years[0],'target_year':years[1],
+                               'area':polygon.area,'area_units':'metres squared','geometry':geometry,
+                               'source':'semantic_image_evidence_rule','confidence':'rule_candidate'})
         evidence_tables=[before,after]
         for side,subset in enumerate((earlier,later)):
             evidence=evidence_tables[side];by_id=evidence.set_index('node_id').to_dict('index') if len(evidence) else {}
@@ -210,7 +229,15 @@ def detect_classical(graph,context):
                     (e['target']==node['id'] and source[e['source']]['class_id']==1) for e in document['temporal_edges'] if e['relation'] in ('identity','contained_in')):
                     event='persistent';label=0
                 elif status!='unchanged': event=status
-                else: event='persistent' if node['class_id']!=0 else 'unknown_observation'
+                else:
+                    same_class=any(((e['source']==node['id'] and source[e['target']]['class_id']==node['class_id']) or
+                                    (e['target']==node['id'] and source[e['source']]['class_id']==node['class_id']))
+                                   and e['relation'] in ('identity','contained_in') for e in document['temporal_edges'])
+                    event='persistent' if same_class else 'not_assessed' if node['class_id']!=0 else 'unknown_observation'
+                nonbuilding_code={(0,3):('tree_loss',4),(1,3):('tree_gain',5),(1,2):('new_road',6)}.get((side,node['class_id']))
+                if nonbuilding_code:
+                    relation,code=nonbuilding_code;count=int(((change_map==code)&(arrays[side][0]==i)).sum())
+                    if count: event=relation;ev={**ev,'changed_area_m2':count*resolution**2,'rule_code':code}
                 changes.append({'gid':node['id'],'year':node['year'],'event':event,'label':label,'confidence':node['confidence'],'source':'semantic_image_evidence_rule','evidence':ev})
     # Final observability gates override every engine, including pseudo negatives.
     for row in changes:

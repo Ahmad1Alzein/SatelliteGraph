@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from src.config import DEFAULT_CONFIG
-from src.pipeline_state import input_fingerprint, validate_resume
+from src.pipeline_state import input_fingerprint, validate_resume,change_fingerprint
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "pipelines" / "semantic_temporal"
@@ -100,6 +100,7 @@ def _start(output: Path, stage: str, method: str, options: dict) -> dict:
     for dependent in ({"segmentation": ("graph", "change"), "graph": ("change",)}.get(stage, ())):
         state.setdefault("stages", {}).pop(dependent, None)
     state.setdefault("stages", {})[stage] = {"method": method, "status": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+    if stage=='change': state['stages'][stage]['settings_fingerprint']=change_fingerprint(effective)
     _save(output, state)
     return state
 
@@ -224,7 +225,7 @@ def run(segmentation: str, graph_method: str, change_method: str, output, *, unt
         state=relocate_run(output,state)
         effective=resolve_options(state.get('options',{}),options,initial=not bool(state),project_root=Path(options.get('project_root') or REPO))
         validate_resume(state,'segmentation',input_fingerprint(effective))
-        downstream_changed=any(effective.get(k)!=state.get('options',{}).get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance'))
+        downstream_changed=change_fingerprint(effective)!=state.get('stages',{}).get('change',{}).get('settings_fingerprint')
         state['options']=effective;_save(output,state)
     else: downstream_changed=False
     results={}

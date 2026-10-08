@@ -7,7 +7,7 @@ import torch
 from torch.nn import functional as F
 from affine import Affine
 from shapely.geometry import Polygon,shape
-from .storage import atomic_json,read_json,sha256
+from .storage import atomic_json,read_json,sha256,save_manifest
 from .registration import prepare_tile
 from .gnn_model import RGNN
 
@@ -32,6 +32,23 @@ def save_gnn_checkpoint(path,model,schema,normalization,settings):
     temporary=path.with_suffix('.tmp');torch.save(model.state_dict(),temporary);temporary.replace(path)
     atomic_json(path.with_suffix('.json'),{'schema':schema,'normalization':normalization,'settings':settings,
                  'state_sha256':sha256(path),'target':'building construction/extension pseudo labels'})
+
+
+def _persist_result(directory,result):
+    atomic_json(directory/'report.json',result)
+    paths={'report':directory/'report.json'}
+    if result.get('predictions'): paths['predictions']=Path(result['predictions'])
+    if result.get('checkpoint'):
+        checkpoint=Path(result['checkpoint'])
+        if checkpoint.is_relative_to(directory):
+            paths.update(checkpoint=checkpoint,checkpoint_metadata=checkpoint.with_suffix('.json'))
+        else:
+            provenance=directory/'checkpoint_provenance.json'
+            atomic_json(provenance,{'checkpoint':str(checkpoint),'sha256':sha256(checkpoint),
+                                    'metadata_sha256':sha256(checkpoint.with_suffix('.json'))})
+            paths['checkpoint_provenance']=provenance
+    atomic_json(directory/'artifact.json',{'kind':'gnn','directory':directory,'paths':paths})
+    save_manifest(directory,paths)
 
 
 def _normalize(x,edge_attr,edge_index,train_nodes):
@@ -89,9 +106,12 @@ def run_gnn(graph,context,*,checkpoint=None):
         x=data['x'];edge_attr=data['edge_attr'];edge_index=data['edge_index'];edge_type=data['edge_type'];ids=data['node_ids']
     directory=graph.directory/'gnn';directory.mkdir(exist_ok=True)
     labels=np.full(len(ids),-1,np.int64);index={ident:i for i,ident in enumerate(ids)}
+    eligible=np.array([n['class_id']==1 and n['observed_fraction']>=.95
+                       and n['known_counterpart_fraction']>=.95 and n['confidence']>=.6 for n in document['nodes']])
     targets=pd.read_csv(graph.paths['targets']) if graph.paths['targets'].exists() else pd.DataFrame()
     for row in targets.to_dict('records'):
-        if row['gid'] in index and row['label'] in (0,1) and row['confidence']>=.6: labels[index[row['gid']]]=int(row['label'])
+        if row['gid'] in index and eligible[index[row['gid']]] and row['label'] in (0,1) and row['confidence']>=.6:
+            labels[index[row['gid']]]=int(row['label'])
     positive=int((labels==1).sum());negative=int((labels==0).sum())
     result={'positive_targets':positive,'negative_targets':negative,'audit_status':'not_provided',
             'evaluation':{'status':'not_independently_evaluated','reason':'pseudo labels are classical rule outputs'},'predictions':None,'checkpoint':None}
@@ -110,7 +130,7 @@ def run_gnn(graph,context,*,checkpoint=None):
     else:
         if not positive or not negative:
             result.update(status='insufficient_data',reason='Training needs reliable positive and negative building targets; supply a compatible --gnn-checkpoint or additional labelled image pairs')
-            atomic_json(directory/'report.json',result);return result
+            _persist_result(directory,result);return result
         tile_groups=evaluation_groups(context);groups=[]
         # Union group membership again at combined-object level, protecting multi-tile objects.
         parent={g:g for g in set(tile_groups.values())}
@@ -143,8 +163,7 @@ def run_gnn(graph,context,*,checkpoint=None):
         settings['threshold']=threshold;checkpoint=directory/'model.pt';save_gnn_checkpoint(checkpoint,model,schema,norm,settings)
         result.update(checkpoint=str(checkpoint),groups=sorted(set(groups)),folds=len(folds))
     predictions=directory/'predictions.csv'
-    eligible=np.array([n['class_id']==1 and n['observed_fraction']>=.95 and n['known_counterpart_fraction']>=.95 for n in document['nodes']])
     pd.DataFrame({'gid':ids,'probability':probabilities,'prediction':np.where(eligible,(probabilities>=threshold).astype(int),-1),'eligible_building_target':eligible}).to_csv(predictions,index=False)
     result['predictions']=str(predictions);result['threshold']=threshold
-    atomic_json(directory/'report.json',result)
+    _persist_result(directory,result)
     return result

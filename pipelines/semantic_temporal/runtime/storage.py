@@ -59,6 +59,11 @@ def verify_manifest(directory):
         p = (directory/name).resolve()
         if not p.is_relative_to(directory.resolve()) or not p.is_file() or sha256(p)!=digest:
             raise ValueError(f'Artifact changed or missing: {name}')
+    provenance=directory/'checkpoint_provenance.json'
+    if provenance.is_file():
+        value=read_json(provenance);checkpoint=Path(value['checkpoint'])
+        for path,digest in ((checkpoint,value['sha256']),(checkpoint.with_suffix('.json'),value['metadata_sha256'])):
+            if not path.is_file() or sha256(path)!=digest: raise ValueError(f'External checkpoint changed or missing: {path}')
 
 
 def load_segmentation(path):
