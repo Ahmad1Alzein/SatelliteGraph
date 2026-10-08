@@ -14,7 +14,7 @@ def check_environment(context=None):
         available=importlib.util.find_spec(module) is not None
         try: version=importlib.metadata.version(distribution) if available else None
         except importlib.metadata.PackageNotFoundError: version='local'
-        libraries[module]={'available':available,'version':version}
+        libraries[module]={'available':available,'version':version,'required':module!='easydict'}
     manifest=read_json(Path(__file__).resolve().parents[1]/'model_assets.json');models=[]
     for asset in manifest['assets']:
         path=root/'checkpoints'/asset['path']
@@ -26,7 +26,9 @@ def check_environment(context=None):
         import torch
         cuda=torch.cuda.is_available();cuda_build=torch.version.cuda
     else: cuda=False;cuda_build=None
-    ready=all(lib['available'] for lib in libraries.values()) and all(m['status']=='verified' for m in models)
+    # easydict belongs to the publisher's demo config. Our FasterSeg adapter
+    # loads model_seg directly and does not import that configuration module.
+    ready=all(lib['available'] for lib in libraries.values() if lib['required']) and all(m['status']=='verified' for m in models)
     return {'status':'ready' if ready else 'needs_setup','libraries':libraries,'models':models,
             'cuda_available':cuda,'torch_cuda_build':cuda_build,'default_device':'cpu',
             'general_requires_osgeo':False,'reproduction_requires_osgeo':True,'gnn_checkpoint':'train your own compatible checkpoint; no universal pretrained change model',
