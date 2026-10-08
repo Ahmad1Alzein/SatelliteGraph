@@ -1,0 +1,187 @@
+"""Current-image alignment and real shared-grid preparation."""
+from dataclasses import replace
+import math
+import cv2
+import numpy as np
+from affine import Affine
+from rasterio.crs import CRS
+from rasterio.warp import reproject, transform, transform_bounds, calculate_default_transform
+from rasterio.enums import Resampling
+from shapely.geometry import Polygon
+from .contracts import GridSpec
+from .inputs import read_tile
+from .storage import atomic_json, read_json
+from src.stage5.registration import fit_registration
+
+
+def _corners(tile):
+    h,w=tile.shape_hw; affine=Affine(*tile.grid.affine)
+    return [affine*p for p in ((0,0),(w,0),(w,h),(0,h))]
+
+
+def _world_points(tile, points, context, *, registered=True):
+    points=np.asarray(points,float)
+    affine=Affine(*tile.grid.affine)
+    xy=np.array([affine*tuple(p) for p in points])
+    target=context.options.get('target_crs')
+    if tile.grid.crs and target and tile.grid.crs!=target:
+        x,y=transform(tile.grid.crs,target,xy[:,0],xy[:,1]); xy=np.column_stack([x,y])
+    elif not tile.grid.crs and tile.grid.physical_pixel_size:
+        xy*=np.asarray(tile.grid.physical_pixel_size)
+    registration=context.options.get('registration')
+    if registered and registration and tile.year==context.years[0].year:
+        a=np.array(registration['affine']).reshape(2,3)
+        xy=xy@a[:,:2].T+a[:,2]
+    return xy
+
+
+def coverage_pairs(context):
+    if len(context.years)!=2: return []
+    footprints={}
+    for year in context.years:
+        for tile in year.tiles:
+            h,w=tile.shape_hw
+            footprints[tile.key]=Polygon(_world_points(tile,[(0,0),(w,0),(w,h),(0,h)],context))
+    return [(a.key,b.key) for a in context.years[0].tiles for b in context.years[1].tiles
+            if footprints[a.key].intersection(footprints[b.key]).area>0]
+
+
+def _features(tile, context):
+    rgb,mask=read_tile(tile); h,w=mask.shape
+    factor=min(1.0,2048/max(h,w)); H=max(1,round(h*factor)); W=max(1,round(w*factor))
+    gray=cv2.cvtColor(cv2.resize(rgb,(W,H)),cv2.COLOR_RGB2GRAY)
+    valid=cv2.resize(mask.astype(np.uint8),(W,H),interpolation=cv2.INTER_NEAREST)*255
+    kp,desc=cv2.SIFT_create(nfeatures=6000).detectAndCompute(cv2.createCLAHE(2.0,(8,8)).apply(gray),valid)
+    if desc is None or len(kp)<6: raise ValueError('Image registration has insufficient texture; supply control points')
+    points=[((p.pt[0]+.5)*w/W,(p.pt[1]+.5)*h/H) for p in kp]
+    return _world_points(tile,points,context,registered=False),desc
+
+
+def _matched_controls(moving,reference,context):
+    mp,md=_features(moving,context); rp,rd=_features(reference,context)
+    matcher=cv2.BFMatcher(cv2.NORM_L2)
+    def ratio(a,b):
+        return {p[0].queryIdx:p[0].trainIdx for p in matcher.knnMatch(a,b,k=2)
+                if len(p)==2 and p[0].distance<.75*p[1].distance}
+    forward=ratio(md,rd); backward=ratio(rd,md)
+    pairs=[(a,b) for a,b in forward.items() if backward.get(b)==a]
+    if len(pairs)<6: raise ValueError('Insufficient mutual registration landmarks; supply control points')
+    return mp[[a for a,b in pairs]],rp[[b for a,b in pairs]]
+
+
+def prepare_comparison(context):
+    options=dict(context.options)
+    tiles=[tile for year in context.years for tile in year.tiles]
+    has_map=[bool(t.grid.crs) for t in tiles]
+    if any(has_map) and not all(has_map): raise ValueError('Cannot compare mapped imagery with an unrelated pixel coordinate frame')
+    if all(has_map):
+        reference=context.years[-1].tiles[0]
+        target=options.get('target_crs')
+        if not target:
+            crs=CRS.from_user_input(reference.grid.crs)
+            if crs.is_projected and math.isclose(crs.linear_units_factor[1],1): target=crs.to_string()
+            else:
+                centre=Affine(*reference.grid.affine)*(reference.shape_hw[1]/2,reference.shape_hw[0]/2)
+                lon,lat=transform(reference.grid.crs,'EPSG:4326',[centre[0]],[centre[1]])
+                zone=min(60,max(1,int((lon[0]+180)//6)+1))
+                target=f'EPSG:{(32600 if lat[0]>=0 else 32700)+zone}'
+        crs=CRS.from_user_input(target)
+        if not crs.is_projected or not math.isclose(crs.linear_units_factor[1],1): raise ValueError('Target CRS must use projected metres')
+        options['target_crs']=crs.to_string(); options['coordinate_units']='metres'
+    else:
+        physical=[bool(t.grid.physical_pixel_size) for t in tiles]
+        if any(physical) and not all(physical): raise ValueError('Supply pixel size for each original image frame')
+        options['coordinate_units']='metres' if all(physical) else 'pixels'
+    reference=context.years[-1].tiles[0]
+    ref_affine=Affine(*reference.grid.affine)
+    if reference.grid.crs and options.get('target_crs')!=reference.grid.crs:
+        corners=np.array(_corners(reference)); bounds=(*corners.min(0),*corners.max(0))
+        ref_affine,_,_=calculate_default_transform(reference.grid.crs,options['target_crs'],
+                                                   reference.shape_hw[1],reference.shape_hw[0],*bounds)
+    elif not reference.grid.crs and reference.grid.physical_pixel_size:
+        ref_affine=Affine.scale(*reference.grid.physical_pixel_size)*ref_affine
+    resolution=float(options.get('target_resolution') or math.sqrt(abs(ref_affine.determinant)))
+    if not math.isfinite(resolution) or resolution<=0: raise ValueError('Target resolution must be positive')
+    options['shared_resolution']=resolution
+    options['shared_anchor']=[ref_affine.c,ref_affine.f]
+    prepared=replace(context,options=options)
+    if len(context.years)==2:
+        registration=None
+        if options.get('registration_json'):
+            controls=read_json(options['registration_json'])
+            registration=fit_registration(controls['moving_xy'],controls['reference_xy'],
+                                          max_residual_m=float(controls.get('max_residual_m',2.0)))
+        elif options.get('register_images'):
+            pairs=coverage_pairs(prepared)
+            if not pairs: raise ValueError('Yearly image coverage does not overlap; registration cannot be estimated')
+            by_key={t.key:t for t in tiles}; moving=[];reference=[]
+            indices=np.unique(np.linspace(0,len(pairs)-1,min(8,len(pairs))).astype(int))
+            for index in indices:
+                a,b=pairs[index]
+                try: m,r=_matched_controls(by_key[a],by_key[b],prepared)
+                except ValueError: continue
+                moving.extend(m);reference.extend(r)
+            if len(moving)<6: raise ValueError('Registration lacks distributed landmarks; supply --registration-json')
+            m=np.array(moving);r=np.array(reference)
+            _,unique=np.unique(np.round(m,6),axis=0,return_index=True)
+            registration=fit_registration(m[unique],r[unique])
+        if registration:
+            if options['coordinate_units']=='pixels':
+                registration={k.replace('_m2','_pixel2').replace('_m','_pixels'):v for k,v in registration.items()}
+            registration['units']=options['coordinate_units']; options['registration']=registration
+        elif not all(has_map):
+            # Distinct source pixels require explicit frame alignment, not a guessed identity.
+            raise ValueError('Original-pixel comparison needs --register-images or --registration-json')
+    prepared=replace(context,options=options)
+    atomic_json(context.output/'context.json',prepared)
+    return prepared
+
+
+def prepare_tile(tile,context):
+    rgb,valid=read_tile(tile); h,w=valid.shape
+    affine=Affine(*tile.grid.affine); crs=tile.grid.crs; target=context.options.get('target_crs')
+    units=context.options.get('coordinate_units',tile.grid.units)
+    if crs and target and crs!=target:
+        corners=np.array(_corners(tile)); bounds=(*corners.min(0),*corners.max(0))
+        destination,W,H=calculate_default_transform(crs,target,w,h,*bounds,
+                          resolution=context.options.get('target_resolution'))
+        warped=np.zeros((H,W,3),np.uint8); observed=np.zeros((H,W),np.uint8)
+        for band in range(3):
+            reproject(rgb[:,:,band],warped[:,:,band],src_transform=affine,src_crs=crs,
+                      dst_transform=destination,dst_crs=target,resampling=Resampling.bilinear)
+        reproject(valid.astype(np.uint8),observed,src_transform=affine,src_crs=crs,
+                  dst_transform=destination,dst_crs=target,resampling=Resampling.nearest)
+        rgb,valid,affine,crs=warped,observed>0,destination,target
+    elif not crs and tile.grid.physical_pixel_size:
+        sx,sy=tile.grid.physical_pixel_size; affine=Affine.scale(sx,sy)*affine
+    registration=context.options.get('registration')
+    if registration and tile.year==context.years[0].year:
+        affine=Affine(*registration['affine'])*affine
+    if not math.isfinite(affine.determinant) or abs(affine.determinant)<1e-15: raise ValueError('Singular image affine')
+    resolution=context.options.get('shared_resolution')
+    if resolution:
+        ax,ay=context.options['shared_anchor']; H,W=valid.shape
+        corners=np.array([affine*p for p in ((0,0),(W,0),(W,H),(0,H))])
+        lo=corners.min(0); hi=corners.max(0); sy=-1 if crs else 1
+        x=ax+math.floor((lo[0]-ax)/resolution+1e-7)*resolution
+        y=(ay+math.ceil((hi[1]-ay)/resolution-1e-7)*resolution) if sy<0 else (ay+math.floor((lo[1]-ay)/resolution+1e-7)*resolution)
+        dest=Affine(resolution,0,x,0,sy*resolution,y)
+        width=max(1,math.ceil((hi[0]-x)/resolution-1e-7))
+        height=max(1,math.ceil(((y-lo[1]) if sy<0 else (hi[1]-y))/resolution-1e-7))
+        if (width,height)!=(W,H) or not np.allclose(tuple(dest)[:6],tuple(affine)[:6],rtol=0,atol=1e-8):
+            warped=np.zeros((height,width,3),np.uint8); observed=np.zeros((height,width),np.uint8)
+            if crs:
+                for band in range(3):
+                    reproject(rgb[:,:,band],warped[:,:,band],src_transform=affine,src_crs=crs,
+                              dst_transform=dest,dst_crs=crs,resampling=Resampling.bilinear)
+                reproject(valid.astype(np.uint8),observed,src_transform=affine,src_crs=crs,
+                          dst_transform=dest,dst_crs=crs,resampling=Resampling.nearest)
+            else:
+                matrix=np.array(tuple(Affine.translation(-.5,-.5)*(~dest)*affine*Affine.translation(.5,.5))[:6]).reshape(2,3)
+                warped=cv2.warpAffine(rgb,matrix,(width,height),flags=cv2.INTER_LINEAR)
+                observed=cv2.warpAffine(valid.astype(np.uint8),matrix,(width,height),flags=cv2.INTER_NEAREST)
+            rgb,valid=warped,observed>0
+        affine=dest
+    physical=(math.hypot(affine.a,affine.d),math.hypot(affine.b,affine.e)) if units=='metres' else None
+    rgb[~valid]=0
+    return rgb,valid,GridSpec(crs,tuple(affine)[:6],units,physical)
