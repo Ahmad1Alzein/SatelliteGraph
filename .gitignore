@@ -33,6 +33,8 @@ coverage.xml
 .pytype/
 .ruff_cache/
 .cache/
+/.tools/
+/.worktrees/
 
 # Local configuration and secrets
 .env
