@@ -173,7 +173,7 @@ def segment(image, px_area=0.5625, log=None, *, P, models, valid, building_setti
     t0 = time.time()
     h, w = image.shape[:2]
     image2x = cv2.resize(image, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-    p2, cp = semantics(image, models)
+    p2, cp, shape_probability, max_probability = semantics(image, models)
     p2[:,~valid]=0
     cp[:,~valid]=0
     px_m = math.sqrt(px_area)
@@ -296,4 +296,4 @@ def segment(image, px_area=0.5625, log=None, *, P, models, valid, building_setti
     log['merges'] = int((merge_log.decision == 'merge').sum()) if len(merge_log) else 0
     log['merges_by_class'] = {CLASSES[int(k)] if str(k).isdigit() else str(k): int(v) for k, v in merge_log[merge_log.decision == 'merge']['class'].value_counts().items()} if len(merge_log) else {}
     log.update({'delany_parcels': n_parcels, 'segments': int(final.max()), 'unassigned_pixels': int((final == 0).sum()), 'seconds': round(time.time() - t0, 1)})
-    return (final, seg_cls, seg_src, cp, image2x, rule_support, pre_merge, merge_log)
+    return (final, seg_cls, seg_src, cp, image2x, rule_support, pre_merge, merge_log, shape_probability, max_probability)

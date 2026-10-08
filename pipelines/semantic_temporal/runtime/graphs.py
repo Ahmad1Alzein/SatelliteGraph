@@ -22,7 +22,7 @@ def transform_geometry(geom,affine):
 
 
 def _old_tile(labels,classes,probabilities,key,grid,offset=(0,0),source_grid=None):
-    from src.stage3.geometry import build_node_geometries
+    from src.stage3.geometry import build_node_geometries,spatial_context
     from src.stage3.adjacency import build_adjacency_edges
     from src.stage3.pipeline import _build_nodes,_build_edges,_annotate_graph,_annotate_analysis_view
     from src.stage3.schema import SCHEMA_VERSION,ADJACENCY_DEFINITION,validate_graph_document
@@ -40,7 +40,9 @@ def _old_tile(labels,classes,probabilities,key,grid,offset=(0,0),source_grid=Non
     nodes=_build_nodes(result,geometries)
     edges=_build_edges(key,nodes,build_adjacency_edges(labels,node_geometries=geometries,tile_metadata=metadata),geometries)
     _annotate_graph(nodes,edges);_annotate_analysis_view(nodes,edges,{})
+    spatial=spatial_context(metadata)
     document={'schema_version':SCHEMA_VERSION,'graph':{'tile_id':key,'source_image_id':'runtime','tile_metadata':metadata,
+              'projected_measurements':{'unit':spatial.linear_unit if spatial.projected_available else None,'crs':spatial.source_crs_text if spatial.projected_available else None},
               'directed':False,'multigraph':False,'adjacency_definition':ADJACENCY_DEFINITION,'minimum_shared_boundary_pixels':1,
               'node_count':len(nodes),'edge_count':len(edges)},'nodes':nodes,'edges':edges}
     validate_graph_document(document)
@@ -188,8 +190,16 @@ def combine_year_graphs(graphs,context):
         nodes.append(_row(record['node_id'],klass,transform_geometry(geom,reference),rgb,probability,members,graphs[0].year,full))
     scale=math.sqrt(abs(reference.determinant));touches=[(e['source'],e['target'],e['shared_boundary_length_pixels']*scale) for e in old_edges]
     edges=_edges(nodes,touches,graphs[0].method,base.units)
-    combined=_persist(context.output/'annual'/graphs[0].method/str(graphs[0].year),nodes,edges,base,graphs[0].year,graphs[0].method,annual=True,accepted_overlap_matches=accepted,source_tiles=[str(g.directory) for g in graphs])
+    destination=context.output/'annual'/graphs[0].method/str(graphs[0].year)
+    ownership={}
+    from .storage import write_raster
+    for i,tile in enumerate(tiles):
+        path=destination/f'ownership_{i}.tif'
+        write_raster(path,(tile.ownership&(tile.instance_map>0)).astype(np.uint8),inputs[tile.tile_id][0].grid,nodata=0)
+        ownership[tile.tile_id]=str(path)
+    combined=_persist(destination,nodes,edges,base,graphs[0].year,graphs[0].method,annual=True,accepted_overlap_matches=accepted,source_tiles=[str(g.directory) for g in graphs],source_ownership=ownership)
     paths=dict(combined.paths);paths['old_contract']=combined.directory/'old_combined_graph.json';atomic_json(paths['old_contract'],old)
+    paths.update({f'ownership_{i}':Path(path) for i,path in enumerate(ownership.values())})
     combined=GraphArtifact(combined.year,combined.method,combined.directory,base,paths);atomic_json(combined.directory/'artifact.json',combined);save_manifest(combined.directory,paths)
     return combined
 

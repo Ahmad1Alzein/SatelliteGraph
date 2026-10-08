@@ -27,7 +27,7 @@ def segment_tile(tile,context,*,models=None):
               'road_close_px':max(1,round(3.75/pixel))}
     building={'building_prob_2x':.4,'min_building_m2':27.,'neck_min_core_m2':20.,'neck_split_radius_px':max(0,round(1.5/pixel))}
     log={}
-    labels,classes,sources,probabilities,image,rule,_,merge_log=segment(rgb,area,log,P=settings,
+    labels,classes,sources,probabilities,image,rule,_,merge_log,shape_probability,max_probability=segment(rgb,area,log,P=settings,
         models=models or load_models(context),valid=observed,building_settings=building)
     labels[~observed]=0
     # Preserve unknown observations rather than folding them into bare soil/land.
@@ -61,6 +61,8 @@ def segment_tile(tile,context,*,models=None):
     write_raster(paths['labels'],result,outgrid,nodata=0);write_raster(paths['classes'],class_map,outgrid,nodata=255)
     write_raster(paths['valid'],observed.astype(np.uint8),outgrid,nodata=0);write_raster(paths['image'],image.transpose(2,0,1),outgrid)
     probabilities[:,~observed]=0;np.save(paths['probabilities'],probabilities)
+    for key,data in [('shape_probabilities',shape_probability),('max_probabilities',max_probability)]:
+        data[:,~observed]=0;paths[key]=directory/(key+'.npy');np.save(paths[key],data)
     pd.DataFrame(rows).to_csv(paths['nodes'],index=False);merge_log.to_csv(paths['merges'],index=False)
     atomic_json(paths['lineage'],lineage);atomic_json(paths['validation'],{**log,'valid_pixels':int(observed.sum()),'segments':len(rows),'units':grid.units,'upsampling_adds_detail':False})
     artifact=SegmentationArtifact(tile.year,tile.key,directory,outgrid,shape,paths,lineage)
