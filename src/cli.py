@@ -268,7 +268,7 @@ def _add_pipeline_parser(commands) -> None:
 
     def common(p):
         p.add_argument("--output", required=True, help="Run folder, e.g. artifacts/runs/<name> (one folder per run)")
-        p.add_argument("--project-root", default=".")
+        p.add_argument("--project-root", default=None)
         new = p.add_argument_group("semantic temporal model inputs")
         new.add_argument("--data", default=None, help="Folder with dataset/ and aligned/")
         new.add_argument("--checkpoints", default=None,
@@ -324,7 +324,7 @@ def _add_pipeline_parser(commands) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
-    project_root = Path(args.project_root).resolve()
+    project_root = Path(args.project_root or '.').resolve()
     try:
         if args.stage == "stage1":
             from src.io.tile_image import tile_image
@@ -482,7 +482,7 @@ def main(argv: list[str] | None = None) -> None:
                 return path if path.is_absolute() else project_root / path
 
             options = {
-                "project_root": project_root,
+                "project_root": project_root if args.project_root is not None else None,
                 "data": resolve(args.data), "checkpoints": resolve(args.checkpoints),
                 "skip_input_check": args.skip_input_check,
                 "folders": [resolve(f) for f in args.folders] if args.folders else None, "years": args.years,

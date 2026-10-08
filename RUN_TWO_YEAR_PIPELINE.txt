@@ -1,3 +1,29 @@
+GENERAL SEMANTIC TEMPORAL PIPELINE x NATIVE POWERSHELL
+Run from the repository root. Existing old image/folder commands are below.
+
+$python = '..\.venv\Scripts\python.exe'
+& $python pipelines/semantic_temporal/check_environment.py
+
+Folders:
+& $python -m src pipeline run --segmentation new --graph new --change classical --folders tiles17_23/2017 tiles17_23/2023 --output artifacts/runs/new_folders --device cpu
+
+One image versus one image:
+& $python -m src pipeline run --segmentation new --graph new --change classical --images tiles17_23/2017/tile_00000.png tiles17_23/2023/tile_00000.png --output artifacts/runs/new_pair --device cpu
+
+Separate stages preserve all options:
+& $python -m src pipeline segment --method new --folders tiles17_23/2017 tiles17_23/2023 --output artifacts/runs/staged --device cpu
+& $python -m src pipeline graph --method new --output artifacts/runs/staged
+& $python -m src pipeline change --method classical --output artifacts/runs/staged
+
+Choose --segmentation old and/or --graph old to use preserved existing methods.
+All eight combinations support classical or GNN change. GNN needs sufficient
+confident labels and independent areas for evaluation; see docs/pipeline-options.md.
+Placement metadata is required for PNG inputs in this general pipeline. The
+legacy single-image command below retains its earlier local-image fallback.
+Model assets are downloaded and verified. General runtime requires no osgeo.
+
+LEGACY COMMANDS (PRESERVED)
+
 SATELLITEGRAPH: SINGLE IMAGE, FULL FOLDER, AND TWO-YEAR COMPARISON
 Run these PowerShell commands from the SatelliteGraph repository root.
 The Python environment needs the project dependencies and configured model weights.

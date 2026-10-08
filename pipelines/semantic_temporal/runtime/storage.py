@@ -46,6 +46,9 @@ def write_raster(path, array, grid, *, nodata=None):
 
 
 def save_manifest(directory, paths, **info):
+    paths = dict(paths)
+    description = Path(directory)/'artifact.json'
+    if description.is_file(): paths['description'] = description
     atomic_json(Path(directory)/'manifest.json', {**info, 'files':{
         str(Path(p).relative_to(directory)):sha256(p) for p in paths.values() if Path(p).is_file()}})
 

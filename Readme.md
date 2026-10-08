@@ -62,20 +62,18 @@ cross-tile reconciliation and graph combination.
 
 ## Selectable pipeline: old/new segmentation, graph and change detection
 
-The repository also contains the verified 2013–2023 thesis pipeline (`pipelines/semantic_temporal`).
-`python -m src pipeline` runs either pipeline, one stage at a time or end to end:
+The general Semantic Temporal pipeline is in `pipelines/semantic_temporal/runtime/`.
+It accepts metadata-based folders or one image versus one image. The existing
+SAM/OpenEarthMap stages and frozen study runner remain available.
 
 ```powershell
-python -m src pipeline run --segmentation new --graph new --change gnn --output artifacts
-uns
-ew_new_gnn
-python -m src pipeline run --segmentation old --graph old --change classical --output artifacts
-uns\old_old_classical `
-  --folders tiles17_233 tiles17_233 --register-images
+python -m src pipeline run --segmentation new --graph new --change classical --folders tiles17_23/2017 tiles17_23/2023 --output artifacts/runs/new_folders --device cpu
+python -m src pipeline run --segmentation old --graph old --change classical --images tiles17_23/2017/tile_00000.png tiles17_23/2023/tile_00000.png --output artifacts/runs/old_pair --device cpu
 ```
 
-Supported combinations, inputs, environment, stage-by-stage commands and the output layout are described in
-[Selectable pipeline](docs/pipeline-options.md).
+All eight combinations, saved stage options, input metadata, model setup and
+standalone commands are described in [pipeline instructions](docs/pipeline-options.md).
+See [validation evidence](docs/pipeline-validation.md) for checks and remaining limits.
 
 ## Setup
 

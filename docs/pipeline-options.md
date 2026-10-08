@@ -1,88 +1,97 @@
-# Selectable pipeline: segmentation → graph → change detection
+# Semantic Temporal pipeline
 
-`python -m src pipeline …` runs either of the two pipelines in this repository, one stage at a time or end to
-end:
+The general pipeline lives in `pipelines/semantic_temporal/runtime/`. It accepts one or two years, arbitrary folder names and tile counts, or individual images. The existing `src` stages and `image`/`folder` commands remain available. `pipelines/semantic_temporal/run_experiment.py` separately preserves the frozen 2013-2023 study; it is never invoked by the general commands.
 
-| Stage | `old` (SatelliteGraph stages 2–5) | `new` (`pipelines/semantic_temporal`) |
-|---|---|---|
-| Segmentation | SAM 2.1 Hiera-L + OpenEarthMap FasterSeg, Stage 2R automatic refinement (1.5 m) | multi-scale SegFormer + Delineate Anything v2 + RGB rules, frozen releases with checks C1–C15 (0.75 m) |
-| Graph | Stage 3 tile graphs + Stage 4 combined year graph (4-connected adjacency) | region graphs (`touches` + building `near` edges, 37 node / 9 edge features), temporal layer, spatio-temporal graph, 7-tile strip |
-| Change: `classical` | Stage 5 temporal graph and change events | rule-based change labels on the spatio-temporal graph (the frozen 2013–2023 baseline) |
-| Change: `gnn` | not available | relational GNN, leave-one-tile-out, deterministic CPU training |
-
-## Supported combinations
-
-Only native combinations run. Everything else is refused before any work starts.
-
-| Segmentation | Graph | Change | |
-|---|---|---|---|
-| old | old | classical | SatelliteGraph end to end |
-| new | new | classical | thesis pipeline up to the rule-based change labels |
-| new | new | gnn | full thesis pipeline (the GNN's pseudo-labels are the classical change labels, so `gnn` runs `classical` first) |
-
-The following combinations are **refused**:
-- **old ↔ new mixes:** each graph builder reads its own segmentation format. Old maps are 1.5 m, with `unknown` and multi-part objects. New releases are validated 0.75 m single-region segments. A mix would need a format adapter, which doesn't exist yet.
-- **old graph + gnn:** the old graph has no node or edge feature tensors, and the GNN labels come from the new temporal layer.
-
-## Inputs
-
-**new**
-- Default folders, relative to the repository and git-ignored: `data/experiment_2013_2023/` (`dataset/2013`, `dataset/2023`, `aligned/`) and `checkpoints/experiment_2013_2023/` (`DelineateAnythingv2.pt`, `satlens-segformer/`). Use `--data` and `--checkpoints` to point elsewhere.
-- Every file is checked against `pipelines/semantic_temporal/reference/input_manifest.json` before the run (24 files). Use `--skip-input-check` for other data. The final verification then reports differences from the thesis results, which is expected for other data.
-
-**old**
-- `--folders EARLIER LATER`: two tile folders, each with PNG tiles, `metadata.csv` and the source GeoTIFF, as for `folder run`.
-- For the classical stage, also `--registration-json` or `--register-images`.
-
-## Environment
-
-```
-conda env create -f pipelines\experiment_2013_2023\environment\environment_windows_exact.yml
-conda activate repro-2013-2023
-pip install -r requirements.txt          # old pipeline: SAM 2 (vendored), hydra, pycocotools, easydict, pytest
-```
-
-The exact environment reproduces the thesis results byte for byte on the original hardware (see
-`pipelines/semantic_temporal/README.md`, section 5).
-
-## Commands
-
-End to end:
-
-```
-python -m src pipeline run --segmentation new --graph new --change gnn       --output artifacts\runs\new_new_gnn
-python -m src pipeline run --segmentation new --graph new --change classical --output artifacts\runs\new_new_classical
-python -m src pipeline run --segmentation old --graph old --change classical --output artifacts\runs\old_old_classical ^
-       --folders tiles17_23\2013 tiles17_23\2023 --register-images
-```
-
-Stage by stage (the same `--output` folder each time; every stage checks that the previous one completed):
-
-```
-python -m src pipeline segment --method new       --output artifacts\runs\exp1
-python -m src pipeline graph   --method new       --output artifacts\runs\exp1
-python -m src pipeline change  --method classical --output artifacts\runs\exp1
-python -m src pipeline change  --method gnn       --output artifacts\runs\exp1
-```
-
-Check a new → new → gnn run against the thesis results at any time:
-
-```
-python pipelines\experiment_2013_2023\verify_outputs.py artifacts\runs\new_new_gnn\work
-```
-
-## Outputs (one folder per run, under the git-ignored `artifacts/`)
-
-| Path | Content |
+| Selection | Method |
 |---|---|
-| `<run>/run.json` | selected methods, per-stage status (`running` / `complete` / `failed` + error), options, git commit |
-| **old** `<run>/annual_<year>/` | `stage2/` (segmentation, Stage 2R), `stage3/` + `stage4/` (graphs), overlays, `run.json` |
-| **old** `<run>/classical_old/` | Stage 5 temporal graph, `changes.geojson`, `report.json` |
-| **new** `<run>/work/final_segmentation/` | frozen segmentation releases `FROZEN_<year>_<tile>_<v>` |
-| **new** `<run>/work/graphs/` | tile graphs, frozen temporal layers and spatio-temporal graphs, `change_stgraph_2013_2023_<tile>/` (classical change labels), `FROZEN_strip_tile_00000-00006_v1/` (strip mosaic, strip spatio-temporal graph, `gnn/`) |
-| **new** `<run>/work/thesis_figures/`, `gnn_viz_tile_00002/` | figures (after the gnn stage) |
-| **new** `<run>/work/REPRODUCTION_REPORT.md`, `logs/` | verification against the thesis results (partial after an early stage), run log, stage ledger |
+| Segmentation `old` | Existing SAM 2.1 + OpenEarthMap FasterSeg, automatic Stage 2R refinement |
+| Segmentation `new` | Local SegFormer, Delineate Anything v2, multi-scale evidence and region refinement |
+| Graph `old` | Existing Stage 3 adjacency and Stage 4 overlap ownership |
+| Graph `new` | Connected regions, adjacency and metric building-near edges |
+| Change `classical` | Existing Stage 5 rules for old graphs; semantic image evidence for new graphs |
+| Change `gnn` | Relational GNN with classical building construction/extension pseudo labels |
 
-The new pipeline's stage groups run all tiles per group: segmentation, then graph, then classical, then gnn.
-Every step reads only the frozen outputs of the previous groups, so a staged run gives byte-identical results to
-the original one-pass run.
+All eight segmentation x graph x change combinations are supported through explicit adapters. Old graph objects may remain multipart; the new graph adapter splits disconnected objects and records lineage. New segmentation uses a method-defined 2x grid: this does not increase physical detail.
+
+## Native PowerShell commands
+
+From the repository root, use the project environment:
+
+```powershell
+$python = '..\.venv\Scripts\python.exe'
+& $python pipelines/semantic_temporal/check_environment.py
+& $python -m src pipeline run --segmentation new --graph new --change classical --folders tiles17_23/2017 tiles17_23/2023 --output artifacts/runs/new_folders --device cpu
+```
+
+One image versus one image:
+
+```powershell
+& $python -m src pipeline run --segmentation new --graph new --change classical --images tiles17_23/2017/tile_00000.png tiles17_23/2023/tile_00000.png --output artifacts/runs/new_pair --device cpu
+```
+
+Use `--years 2017 2023` when directory names are not years. One input supports segmentation and graph only: add `--until graph`. Change needs exactly two chronological years.
+
+Separate commands inherit every saved input and inference option from `run.json`:
+
+```powershell
+& $python -m src pipeline segment --method new --folders tiles17_23/2017 tiles17_23/2023 --output artifacts/runs/staged --device cpu
+& $python -m src pipeline graph --method new --output artifacts/runs/staged
+& $python -m src pipeline change --method classical --output artifacts/runs/staged
+```
+
+Old methods through the same general input contract:
+
+```powershell
+& $python -m src pipeline run --segmentation old --graph old --change classical --folders tiles17_23/2017 tiles17_23/2023 --output artifacts/runs/old_folders --device cpu
+```
+
+Standalone entry point (same options and implementation):
+
+```powershell
+& $python pipelines/semantic_temporal/run_pipeline.py run --segmentation new --graph new --change classical --images tiles17_23/2017/tile_00000.png tiles17_23/2023/tile_00000.png --output artifacts/runs/standalone
+```
+
+The first run hashes input files and model assets. CPU is the default and can be slow for full folders. `--device cuda` requires an available CUDA device; `auto` selects it when available. `--inference-window 64 --inference-overlap 16 --no-tta` is useful for small smoke runs; use the default 512/128 and TTA for normal processing.
+
+## Input placement and scale
+
+PNG folders require `metadata.csv` with one row per image: `tile_name,x0,y0`. Offsets are original image pixel coordinates. Optional width/height and valid_width/valid_height are checked; alpha and raster masks exclude missing pixels. Filenames never establish positions.
+
+A matching georeferenced RGB source GeoTIFF supplies the original affine transform, CRS and resolution. PNG pixels must match its windows. The example folders already have metadata and `selection_<year>.tif`. External files use `--metadata FIRST.csv SECOND.csv --source-rasters FIRST.tif SECOND.tif`. Alternatively, complete `affine_a` through `affine_f` and `target_crs` metadata supplies georeferencing. Direct georeferenced RGB GeoTIFF images need no separate CSV. uint16 RGB is converted using the full 0 to 65535 range, rather than an image-dependent contrast stretch.
+
+PNGs with placement metadata but no CRS are accepted in original-image coordinates. Metric segmentation needs `--pixel-size METRES_PER_PIXEL` (one value per input). Cross-year original-pixel alignment needs `--register-images` or `--registration-json`. Without physical scale, comparisons are limited to correspondences; metric event rules and building-near edges are withheld. Old segmentation can still operate in pixels. PNGs without placement metadata are rejected because their original positions cannot be recovered reliably.
+
+Mapped inputs are projected onto a shared metric grid, anchored to the later/reference image. Use `--target-crs` and `--target-resolution` to override it. Coordinate georeferencing alone is recorded as alignment not independently verified. `--register-images` estimates current-data SIFT/RANSAC alignment, with coverage/inlier checks; failure is actionable rather than silently accepting a shift. Control JSON contains `moving_xy` and `reference_xy` arrays of corresponding world-coordinate points. Roof compensation uses current observations; historic study shifts and audits are never reused.
+
+Tile counts and dimensions can differ; temporal comparisons use actual overlap and annual pixel ownership. Missing or unknown coverage cannot become confident positive or negative training labels.
+
+## Resume and override behavior
+
+```powershell
+& $python -m src pipeline run --segmentation new --graph new --change classical --output artifacts/runs/new_pair --resume
+```
+
+Omitted flags inherit saved values, including custom model paths, source paths, registration and booleans. Explicit boolean resets use `--no-register-images`, `--no-skip-input-check`, `--tta` or `--no-tta`. `--skip-input-check` is retained for compatibility and persists; it does not bypass the general placement, mask and scale checks. General runs do not compare files against the historic input manifest.
+
+Changed inputs, model assets or preprocessing options invalidate a run: use a fresh output folder. Changing a stage method rebuilds its dependent stages. Completed artifacts are hash-verified on resume. An interrupted new segmentation resumes at verified completed tiles. Saved outputs can be moved; original source/model files must remain accessible. Older reproduction-format saved runs need a fresh general output folder.
+
+Explicit memory budgets protect large inputs: `--max-pixels` defaults to 16 million prepared output pixels per tile, and `--max-comparison-pixels` to 4 million mosaic pixels. Large or spatially separated inputs should be split into meaningful overlapping areas, or budgets raised to fit available memory. Full-image reads and probability/evidence tensors still require RAM; arbitrary folder support is not an unlimited-memory guarantee.
+
+## GNN behavior
+
+Choose `--change gnn`; this generates classical pseudo labels first. Training needs both confident changed and persistent buildings. Otherwise status is `insufficient_data` and predictions are withheld. A single overlapping area can train but is marked `training_only`; an independent held-out score is not reported. At least three non-overlapping groups with both label classes enable grouped validation/test folds. Fold normalization is fitted only on training nodes; cross-group messages are excluded. Agreement with pseudo labels is not human-audited accuracy.
+
+Use `--gnn-checkpoint PATH` for compatible saved weights-only inference. Each trained checkpoint includes feature schema, normalization, units, settings and a hash. There is no universal project-specific trained GNN to download. `--gnn-epochs` and `--gnn-hidden` control training.
+
+## Models, requirements and outputs
+
+```powershell
+& $python scripts/download_pipeline_models.py
+& $python -m pip install -r requirements.txt
+```
+
+The downloader explicitly acquires and hash-verifies required old and new model assets; inference never downloads implicitly. Existing differing files are preserved and reported. Assets live under `checkpoints/`, with new assets in `checkpoints/semantic_temporal/`. The current environment and all seven required files were verified; no additional downloads are needed here. General processing uses Rasterio and does not require `osgeo`. Frozen study reproduction separately needs its recorded GDAL environment and original dataset.
+
+Outputs include `run.json`, resolved context/registration, canonical segmentation rasters and lineage, per-tile and annual graph JSON/NPZ, temporal graph, classical events/targets, optional GNN checkpoint/report, `validation.json`, `preview_index.json` and `previews/`. Areas use recorded units; GeoJSON is exported to WGS84 only when a CRS exists. Two-year previews show separate actual-year panels.
+
+See [validation evidence](pipeline-validation.md). Scientific accuracy on arbitrary new imagery still requires independent assessment; historic published scores are not transferred to new runs.

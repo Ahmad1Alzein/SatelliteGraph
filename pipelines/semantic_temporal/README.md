@@ -1,3 +1,14 @@
+# Semantic Temporal
+
+The general runtime is `runtime/`, exposed through `python -m src pipeline` and
+`python pipelines/semantic_temporal/run_pipeline.py`. It accepts arbitrary placed
+folders or single images, actual input years and all eight old/new method combinations.
+See [run instructions](../../docs/pipeline-options.md) and
+[validation evidence](../../docs/pipeline-validation.md).
+
+`run_experiment.py`, the original algorithms and `reference/` retain the frozen
+study reproduction below. That mode has its original dataset/environment constraints.
+
 # Reproducible experiment: object-based spatio-temporal graphs for change detection, Shouf 2013 → 2023
 
 This folder contains the exact code of the final 7-tile experiment. Provide the input data and two model

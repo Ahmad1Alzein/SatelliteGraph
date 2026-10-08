@@ -127,6 +127,9 @@ def _persist(directory,nodes,edges,grid,year,method,**extra):
 
 def build_tile_graph(artifact,method,context):
     if method not in ('old','new'): raise ValueError('Graph method must be old or new')
+    if method=='new':
+        from .adapters import connected_region_view
+        artifact=connected_region_view(artifact)
     labels=read_band(artifact.paths['labels']);classes=read_band(artifact.paths['classes']);probabilities=np.load(artifact.paths['probabilities'],allow_pickle=False)
     image=None
     if 'image' in artifact.paths:

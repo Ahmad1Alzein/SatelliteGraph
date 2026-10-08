@@ -24,8 +24,9 @@ def validate_run(context,stage):
             labels=read_band(paths['labels']);valid=read_band(paths['valid'])>0;classes=read_band(paths['classes'])
             if not np.array_equal(labels>0,valid): raise ValueError(f'Segmentation coverage gap: {directory}')
             if np.any(classes[~valid]!=255) or np.any(classes[valid]>8): raise ValueError('Invalid semantic/nodata classes')
+            quality=read_json(paths['validation'])
             for ident in np.unique(labels[valid]):
-                if ndimage.label(labels==ident)[1]!=1: raise ValueError(f'Disconnected region {ident}: {directory}')
+                if quality.get('method')!='old' and ndimage.label(labels==ident)[1]!=1: raise ValueError(f'Disconnected region {ident}: {directory}')
             probability=np.load(paths['probabilities'],allow_pickle=False)
             if probability.shape!=(9,*labels.shape) or not np.isfinite(probability).all(): raise ValueError('Invalid probabilities')
             if any(str(int(i)) not in document['lineage'] for i in np.unique(labels[valid])): raise ValueError('Missing segment lineage')
@@ -70,12 +71,18 @@ def render_outputs(context,stage):
             units.add(graph['units']);polygons=[shape(n['geometry']) for n in nodes]
             lo=np.min([p.bounds[:2] for p in polygons],0);hi=np.max([p.bounds[2:] for p in polygons],0);extent=np.maximum(hi-lo,1e-9)
             scale=min(1200/extent[0],800/extent[1]);width=max(120,round(extent[0]*scale));height=max(50,round(extent[1]*scale))
-            image=Image.new('RGB',(width,height),'white');draw=ImageDraw.Draw(image)
-            to_pixel=lambda x,y:((x-lo[0])*scale,(hi[1]-y)*scale)
-            for node,polygon in zip(nodes,polygons): _polygon(draw,polygon,to_pixel,tuple(COLORS[node['class_id']]),'gray')
-            lookup={n['id']:n for n in nodes}
-            for edge in graph.get('edges',[]):
-                draw.line([to_pixel(*lookup[edge['source']]['position']),to_pixel(*lookup[edge['target']]['position'])],fill='black',width=1)
+            panels=graph.get('years',[graph.get('year')])
+            image=Image.new('RGB',(width*len(panels),height+24),'white')
+            for panel,year in enumerate(panels):
+                draw=ImageDraw.Draw(image)
+                draw.text((panel*width+8,4),str(year),fill='black')
+                to_pixel=lambda x,y:((x-lo[0])*scale+panel*width,(hi[1]-y)*scale+24)
+                for node,polygon in zip(nodes,polygons):
+                    if node['year']==year: _polygon(draw,polygon,to_pixel,tuple(COLORS[node['class_id']]),'gray')
+                lookup={n['id']:n for n in nodes if n['year']==year}
+                for edge in graph.get('edges',[]):
+                    if edge['source'] in lookup and edge['target'] in lookup:
+                        draw.line([to_pixel(*lookup[edge['source']]['position']),to_pixel(*lookup[edge['target']]['position'])],fill='black',width=1)
             title=f'{graph.get("years",graph.get("year"))} | {graph.get("method")} graph | {graph["units"]}'
             if grid.get('crs'):
                 features=[{'type':'Feature','geometry':transform_geom(grid['crs'],'EPSG:4326',n['geometry']),

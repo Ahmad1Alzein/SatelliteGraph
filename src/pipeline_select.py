@@ -229,8 +229,15 @@ def run(segmentation: str, graph_method: str, change_method: str, output, *, unt
     else: downstream_changed=False
     results={}
     for stage,method,execute in (('segmentation',segmentation,segment),('graph',graph_method,graph),('change',change_method,change)):
+        state=_ledger(output)
         saved=state.get('stages',{}).get(stage,{})
-        if resume and saved.get('status')=='complete' and saved.get('method')==method and not (stage=='change' and downstream_changed): results[stage]=saved
+        if resume and saved.get('status')=='complete' and saved.get('method')==method and not (stage=='change' and downstream_changed):
+            from pipelines.semantic_temporal.runtime.storage import verify_manifest
+            artifacts=saved.get('result',{}).get('artifacts')
+            if not artifacts:
+                raise ValueError('This saved run predates the general artifact format; use a fresh --output folder')
+            for artifact in artifacts: verify_manifest(Path(artifact).parent)
+            results[stage]=saved
         else: results[stage]=execute(method,output,**options if stage=='segmentation' else {})
         if stage==until: break
     return results

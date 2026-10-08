@@ -18,6 +18,27 @@ from .graphs import NODE_FEATURES,EDGE_FEATURES
 from .adapters import CANONICAL_TO_OLD
 
 
+def _roof_polygons(docs,polygons,grid,context):
+    from .roof_offsets import roof_offset_field,offset_building_labels
+    from shapely.affinity import translate
+    if grid.units!='metres': return polygons[0],{}
+    bounds=unary_union(polygons[0]+polygons[1]).bounds;resolution=abs(grid.affine[0])
+    sx=1;sy=-1 if grid.crs else 1
+    affine=Affine(resolution,0,bounds[0],0,sy*resolution,bounds[3] if sy<0 else bounds[1])
+    shape_hw=(round((bounds[3]-bounds[1])/resolution),round((bounds[2]-bounds[0])/resolution))
+    if np.prod(shape_hw)>int(context.options.get('max_comparison_pixels') or 4_000_000):
+        raise ValueError('Roof correspondence exceeds --max-comparison-pixels; select overlapping subsets or raise the budget')
+    bids=[[i+1 for i,n in enumerate(d['nodes']) if n['class_id']==1] for d in docs]
+    labels=[rasterize([(p,i+1) for i,p in enumerate(ps)],out_shape=shape_hw,transform=affine,dtype='int32') for ps in polygons]
+    dy,dx,_=roof_offset_field(np.isin(labels[0],bids[0]),np.isin(labels[1],bids[1]),seg=max(32,round(384/resolution)),search=max(1,round(9/resolution)))
+    _,shifts=offset_building_labels(labels[0],bids[0],np.isin(labels[1],bids[1]),dy,dx,local=max(1,round(3/resolution)))
+    moved=list(polygons[0]);offsets={}
+    for ident,(y,x) in shifts.items():
+        offsets[ident-1]=[float(x*resolution),float(y*sy*resolution)]
+        moved[ident-1]=translate(polygons[0][ident-1],xoff=offsets[ident-1][0],yoff=offsets[ident-1][1])
+    return moved,offsets
+
+
 def _observations(document):
     nodes=[]
     for node in document['nodes']:
@@ -50,9 +71,13 @@ def build_temporal_graph(graphs,context):
             edges.append({'source':a['id'],'target':b['id'],'relation':link['relation'],**link['evidence']})
     else:
         tree=STRtree(polygons[1])
+        roof_polygons,roof_offsets=_roof_polygons(docs,polygons,graphs[0].grid,context)
         for i,poly in enumerate(polygons[0]):
-            for raw in sorted(tree.query(poly)):
-                j=int(raw);other=polygons[1][j];shared=poly.intersection(other).area
+            for raw in sorted(tree.query(poly.union(roof_polygons[i]))):
+                j=int(raw);other=polygons[1][j]
+                roof=docs[0]['nodes'][i]['class_id']==docs[1]['nodes'][j]['class_id']==1
+                compared=roof_polygons[i] if roof else poly
+                shared=compared.intersection(other).area
                 if shared<6*abs(Affine(*graphs[0].grid.affine).determinant) or shared<.25*min(poly.area,other.area): continue
                 a,b=docs[0]['nodes'][i],docs[1]['nodes'][j];fa,fb=shared/poly.area,shared/other.area;iou=shared/(poly.area+other.area-shared)
                 same=a['class_id']==b['class_id'] and a['class_id']!=0;score=math.sqrt(fa*fb)
@@ -60,6 +85,7 @@ def build_temporal_graph(graphs,context):
                 relation='identity' if confidence!='low' else 'overlap'
                 if confidence=='low' and same and max(fa,fb)>=.8 and min(poly.area,other.area)>=50: relation='contained_in';confidence='medium'
                 edges.append({'source':a['id'],'target':b['id'],'relation':relation,'shared_area':shared,'iou':iou,
+                              'frame':'roof' if roof else 'ground','roof_shift':roof_offsets.get(i,[0.,0.]) if roof else [0.,0.],
                               'fraction_source':fa,'fraction_target':fb,'confidence':confidence,'edge_role':'primary' if confidence!='low' else 'secondary'})
     for e in edges: e.update(source_year=graphs[0].year,target_year=graphs[1].year,delta_years=graphs[1].year-graphs[0].year)
     directory=context.output/'temporal';directory.mkdir(parents=True,exist_ok=True)
@@ -104,7 +130,11 @@ def _image_evidence(document,grid,shape_hw,context):
             if not np.allclose([relative.a,relative.b,relative.d,relative.e],[1,0,0,1],atol=1e-6): raise ValueError('Comparison evidence must share resolution')
             from .adapters import read_band
             owner=read_band(annual['source_ownership'][f'{artifact.year}:{artifact.tile_key}'])>0
-            own=(labels[y:y+h,x:x+w]>0)&owner
+            left,top=max(0,x),max(0,y);right,bottom=min(shape_hw[1],x+w),min(shape_hw[0],y+h)
+            if left>=right or top>=bottom: continue
+            destination=(slice(top,bottom),slice(left,right))
+            source_slice=(slice(top-y,bottom-y),slice(left-x,right-x))
+            own=(labels[destination]>0)&owner[source_slice]
             quality=read_json(artifact.paths['validation'])
             if quality.get('probability_evidence')=='assigned_label_confidence_only':
                 from .models import load_models
@@ -116,8 +146,9 @@ def _image_evidence(document,grid,shape_hw,context):
                     for source,target in OEM_TO_CLASS.items(): canonical[target]=cv2.resize(values[source],(w,h))
                     samples.append(canonical)
                 native_shape=samples[-1];maxima=np.maximum.reduce(samples)
-            rgb[y:y+h,x:x+w][own]=image[own]
-            shape_prob[:,y:y+h,x:x+w][:,own]=native_shape[:,own];max_prob[:,y:y+h,x:x+w][:,own]=maxima[:,own]
+            rgb[destination][own]=image[source_slice][own]
+            shape_prob[(slice(None),*destination)][:,own]=native_shape[(slice(None),*source_slice)][:,own]
+            max_prob[(slice(None),*destination)][:,own]=maxima[(slice(None),*source_slice)][:,own]
         known=np.isin(labels,[i+1 for i,n in enumerate(nodes) if n['class_id']!=0])
         evidence={}
         for name,klass in [('building',1),('tree',3),('road',2)]:

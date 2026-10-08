@@ -57,9 +57,20 @@ def connected_region_view(artifact):
             lineage[str(next_id)]=artifact.lineage.get(str(parent),[{'segment':int(parent),'tile':artifact.tile_key,'year':artifact.year}])
     if np.array_equal(result,labels): return artifact
     directory=artifact.directory/'connected';directory.mkdir(exist_ok=True)
-    paths=dict(artifact.paths);paths['labels']=directory/'segment_ids.tif';paths['lineage']=directory/'lineage.json'
+    import shutil
+    paths={}
+    for key,path in artifact.paths.items():
+        paths[key]=directory/path.name
+        if path.is_file(): shutil.copy2(path,paths[key])
+    paths['labels']=directory/'segment_ids.tif';paths['lineage']=directory/'lineage.json'
     write_raster(paths['labels'],result,artifact.grid,nodata=0);atomic_json(paths['lineage'],lineage)
-    return replace(artifact,directory=directory,paths=paths,lineage=lineage)
+    classes=read_band(paths['classes']);probability=np.load(paths['probabilities'],allow_pickle=False)
+    paths['nodes']=directory/'nodes.csv'
+    pd.DataFrame([{'segment_id':i,'class_id':int(classes[result==i][0]),'pixels':int((result==i).sum()),
+                  'confidence':float(probability[int(classes[result==i][0]),result==i].mean())} for i in range(1,next_id+1)]).to_csv(paths['nodes'],index=False)
+    view=replace(artifact,directory=directory,paths=paths,lineage=lineage)
+    atomic_json(directory/'artifact.json',view);save_manifest(directory,paths,connected_view=True)
+    return view
 
 
 def export_old_refinement_contract(artifact,context):

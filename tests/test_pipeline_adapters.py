@@ -41,3 +41,18 @@ def test_existing_old_stage2r_can_be_adapted_without_pixel_loss(tmp_path):
     assert np.array_equal(labels,refined.instance_map)
     with rasterio.open(artifact.paths['valid']) as src: valid=src.read(1)>0
     assert np.array_equal(valid,refined.valid_mask)
+
+
+def test_connected_view_keeps_lineage_and_can_be_reloaded(tmp_path):
+    from tests.test_semantic_graphs import make_artifact
+    from pipelines.semantic_temporal.runtime.adapters import connected_region_view
+    from pipelines.semantic_temporal.runtime.storage import load_segmentation,verify_manifest
+    from scipy import ndimage
+    labels=np.array([[1,0,0],[0,0,0],[0,0,1]],np.int32)
+    original=make_artifact(tmp_path,labels)
+    view=connected_region_view(original)
+    loaded=load_segmentation(view.directory/'artifact.json');verify_manifest(view.directory)
+    with rasterio.open(loaded.paths['labels']) as src: new=src.read(1)
+    assert np.array_equal(new>0,labels>0)
+    assert new.max()==2 and loaded.lineage['1']==loaded.lineage['2']
+    assert ndimage.label(new==1)[1]==ndimage.label(new==2)[1]==1
