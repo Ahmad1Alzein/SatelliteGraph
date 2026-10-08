@@ -1,6 +1,6 @@
 # Native validation evidence
 
-Execution date: 2026-10-08. Python 3.11, Windows, CPU PyTorch 2.12.0; CUDA is unavailable. Source implementation is on `feature/semantic-temporal` in `.worktrees/semantic-temporal` until integration.
+Execution date: 2026-10-08. Python 3.11, Windows, CPU PyTorch 2.12.0; CUDA is unavailable. The reviewed implementation was merged locally into `main` at `49d2cf2`. Run commands from the repository root.
 
 ## Verified models and dependencies
 
@@ -37,3 +37,9 @@ Full published 2013-2023 reproduction is unverified: original inputs and the rec
 PNG placement metadata is required. Metric new segmentation requires physical scale. Cross-year inputs without a CRS require explicit or estimated registration. Missing coverage and unknown observations cannot become confident change labels. Explicit per-tile and comparison-mosaic memory budgets remain; use spatial subsets for large/gapped inputs. GNN evaluation requires sufficient labels and independent spatial groups. A single pair does not establish a held-out accuracy score.
 
 The [final review record](pipeline-review.md) lists every confirmed defect, its regression and the execution rulings. New evidence fields use earlier/later names; tree/road change regions and JSON reports agree; construction targets require later-year building endpoints. Model, metadata, source and saved-GNN content changes are fingerprinted or verified before reuse.
+
+## Local main integration
+
+After the approved fast-forward merge, the full suite passed again from the repository root: 346 tests and 114 subtests in 207.07 seconds, with the same existing Rasterio warning. The test log is `artifacts/native_validation/verification/main-merged-tests.log`. No remote push was performed.
+
+Validation outputs and local test dependencies were preserved in the main workspace. Output/input/model path records were relocated from the temporary worktree to the repository root; scientific arrays were unchanged. All 37 canonical artifact manifests were verified after migration. Both `new_pair_final` and `old_pair_final` resumed successfully from the root. Original JSON/YAML path records are archived in `verification/original_path_records.zip`, with the migration report alongside them.
