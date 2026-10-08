@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from src.config import DEFAULT_CONFIG
+from src.pipeline_state import input_fingerprint, validate_resume
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "pipelines" / "experiment_2013_2023"
@@ -90,6 +91,10 @@ def _git_commit() -> str | None:
 
 def _start(output: Path, stage: str, method: str, options: dict) -> dict:
     state = _ledger(output)
+    effective = resolve_options(state.get("options", {}), options, initial=not bool(state),
+                                project_root=Path(options.get("project_root") or REPO))
+    fingerprint = input_fingerprint(effective)
+    validate_resume(state, stage, fingerprint)
     previous = state.get("stages", {})
     if stage != "segmentation":
         seg = previous.get("segmentation", {})
@@ -102,8 +107,10 @@ def _start(output: Path, stage: str, method: str, options: dict) -> dict:
                       method if stage == "change" else None)
     state.setdefault("created", time.strftime("%Y-%m-%d %H:%M:%S"))
     state["git_commit"] = _git_commit()
-    state["options"] = resolve_options(state.get("options", {}), options, initial=not bool(state),
-                                       project_root=Path(options.get("project_root") or REPO))
+    state["options"] = effective
+    state["input_fingerprint"] = fingerprint
+    for dependent in ({"segmentation": ("graph", "change"), "graph": ("change",)}.get(stage, ())):
+        state.setdefault("stages", {}).pop(dependent, None)
     state.setdefault("stages", {})[stage] = {"method": method, "status": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     _save(output, state)
     return state
@@ -133,7 +140,9 @@ def _run_new(output: Path, until: str, options: dict) -> dict:
         cmd.append("--skip-input-check")
     r = subprocess.run(cmd, cwd=PACKAGE, env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1"))  # readable logs on any console
     stages = json.loads((work / "logs" / "stages.json").read_text()) if (work / "logs" / "stages.json").exists() else {}
-    if NEW_GROUP[until] not in stages.get("completed", []):
+    report = json.loads((work / "reproduction_report.json").read_text()) if (work / "reproduction_report.json").exists() else {}
+    verification_exit = r.returncode in (1, 2) and bool(report.get("status"))
+    if NEW_GROUP[until] not in stages.get("completed", []) or (r.returncode != 0 and not verification_exit):
         raise RuntimeError(f"experiment stage '{until}' did not complete (exit {r.returncode}); see {work / 'logs' / 'run.log'}")
     report = json.loads((work / "reproduction_report.json").read_text()) if (work / "reproduction_report.json").exists() else {}
     return {"work": str(work), "verification": report.get("status"),
