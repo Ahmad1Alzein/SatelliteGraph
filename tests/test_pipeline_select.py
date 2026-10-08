@@ -84,7 +84,7 @@ def test_cli_pipeline_commands_parse():
     a = cli.parser().parse_args(["pipeline", "run", "--segmentation", "new", "--graph", "new", "--change", "gnn",
                                  "--output", "artifacts/runs/x"])
     assert (a.stage, a.phase, a.segmentation, a.graph, a.change) == ("pipeline", "run", "new", "new", "gnn")
-    assert a.data == "data/experiment_2013_2023" and a.checkpoints == "checkpoints/experiment_2013_2023"
+    assert a.data is None and a.checkpoints is None
     a = cli.parser().parse_args(["pipeline", "segment", "--method", "old", "--output", "o", "--folders", "x/2013", "y/2023"])
     assert a.method == "old" and a.folders == ["x/2013", "y/2023"]
     with pytest.raises(SystemExit):

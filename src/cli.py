@@ -270,10 +270,11 @@ def _add_pipeline_parser(commands) -> None:
         p.add_argument("--output", required=True, help="Run folder, e.g. artifacts/runs/<name> (one folder per run)")
         p.add_argument("--project-root", default=".")
         new = p.add_argument_group("new pipeline inputs (pipelines/experiment_2013_2023)")
-        new.add_argument("--data", default="data/experiment_2013_2023", help="Folder with dataset/ and aligned/")
-        new.add_argument("--checkpoints", default="checkpoints/experiment_2013_2023",
+        new.add_argument("--data", default=None, help="Folder with dataset/ and aligned/")
+        new.add_argument("--checkpoints", default=None,
                          help="Folder with satlens-segformer/ and DelineateAnythingv2.pt")
-        new.add_argument("--skip-input-check", action="store_true", help="Allow inputs other than the 2013-2023 dataset")
+        new.add_argument("--skip-input-check", action=argparse.BooleanOptionalAction, default=None,
+                         help="Allow inputs other than the reference dataset")
         old = p.add_argument_group("old pipeline inputs (SatelliteGraph stages 2-5)")
         old.add_argument("--folders", nargs=2, default=None, metavar=("EARLIER", "LATER"),
                          help="Two tile folders (PNG + metadata.csv + source GeoTIFF), earlier year first")
@@ -282,10 +283,13 @@ def _add_pipeline_parser(commands) -> None:
         old.add_argument("--metadata", nargs=2, default=None, help="Tile offset CSVs if not beside the PNG tiles")
         reg = old.add_mutually_exclusive_group()
         reg.add_argument("--registration-json", default=None, help="Cross-year control points (old classical)")
-        reg.add_argument("--register-images", action="store_true", help="Estimate cross-year registration (old classical)")
+        reg.add_argument("--register-images", action=argparse.BooleanOptionalAction, default=None,
+                         help="Estimate cross-year registration")
         old.add_argument("--boundary-tolerance", type=float, default=None)
-        old.add_argument("--config", default=str(DEFAULT_CONFIG))
-        old.add_argument("--no-progress", action="store_true")
+        old.add_argument("--config", default=None)
+        progress = old.add_mutually_exclusive_group()
+        progress.add_argument("--no-progress", dest="no_progress", action="store_true", default=None)
+        progress.add_argument("--progress", dest="no_progress", action="store_false")
 
     for name, help_text, choices in (
         ("segment", "Segment both years", ("old", "new")),
@@ -462,6 +466,7 @@ def main(argv: list[str] | None = None) -> None:
                 return path if path.is_absolute() else project_root / path
 
             options = {
+                "project_root": project_root,
                 "data": resolve(args.data), "checkpoints": resolve(args.checkpoints),
                 "skip_input_check": args.skip_input_check,
                 "folders": [resolve(f) for f in args.folders] if args.folders else None, "years": args.years,

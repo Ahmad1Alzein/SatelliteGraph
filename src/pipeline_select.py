@@ -33,6 +33,31 @@ NATIVE = {("old", "old", "classical"), ("new", "new", "classical"), ("new", "new
 NEW_GROUP = {"segmentation": "segmentation", "graph": "graph", "classical": "classical", "gnn": "gnn"}
 
 
+def resolve_options(saved: dict, supplied: dict, *, initial: bool, project_root: Path) -> dict:
+    """Only explicit invocation values override effective saved options."""
+    explicit = {k: v for k, v in supplied.items() if v is not None}
+    merged = {**saved, **explicit}
+    if explicit.get("registration_json") is not None:
+        merged["register_images"] = False
+    elif explicit.get("register_images") is True:
+        merged.pop("registration_json", None)
+    defaults = {"data": project_root / "data/experiment_2013_2023",
+                "checkpoints": project_root / "checkpoints/experiment_2013_2023",
+                "config": project_root / "config.yaml", "skip_input_check": False,
+                "register_images": False, "no_progress": False}
+    for key, value in defaults.items():
+        merged.setdefault(key, value)
+    for key in ("data", "checkpoints", "config", "registration_json", "project_root"):
+        if key in merged and not isinstance(merged[key], dict):
+            p = Path(merged[key]).expanduser()
+            merged[key] = str((p if p.is_absolute() else project_root / p).resolve())
+    for key in ("folders", "images", "metadata", "source_rasters"):
+        if merged.get(key):
+            merged[key] = [str((Path(p) if Path(p).is_absolute() else project_root / p).resolve())
+                           if p is not None else None for p in merged[key]]
+    return merged
+
+
 def check_combination(segmentation: str | None, graph: str | None, change: str | None) -> None:
     """Refuse combinations that are not native (partial selections are checked as far as they go)."""
     if segmentation and graph and segmentation != graph:
@@ -77,7 +102,8 @@ def _start(output: Path, stage: str, method: str, options: dict) -> dict:
                       method if stage == "change" else None)
     state.setdefault("created", time.strftime("%Y-%m-%d %H:%M:%S"))
     state["git_commit"] = _git_commit()
-    state.setdefault("options", {}).update({k: v for k, v in options.items() if v is not None})
+    state["options"] = resolve_options(state.get("options", {}), options, initial=not bool(state),
+                                       project_root=Path(options.get("project_root") or REPO))
     state.setdefault("stages", {})[stage] = {"method": method, "status": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     _save(output, state)
     return state
@@ -151,6 +177,7 @@ def _run_old_classical(output: Path, options: dict) -> dict:
 def segment(method: str, output, **options) -> dict:
     output = Path(output).resolve()
     state = _start(output, "segmentation", method, options)
+    options = state["options"]
     try:
         info = _run_new(output, "segmentation", options) if method == "new" else _run_old_annual(output, options, "segmentation")
     except Exception as exc:
@@ -161,7 +188,7 @@ def segment(method: str, output, **options) -> dict:
 def graph(method: str, output, **options) -> dict:
     output = Path(output).resolve()
     state = _start(output, "graph", method, options)
-    options = {**state.get("options", {}), **{k: v for k, v in options.items() if v is not None}}
+    options = state["options"]
     try:
         info = _run_new(output, "graph", options) if method == "new" else _run_old_annual(output, options, None)
     except Exception as exc:
@@ -172,7 +199,7 @@ def graph(method: str, output, **options) -> dict:
 def change(method: str, output, **options) -> dict:
     output = Path(output).resolve()
     state = _start(output, "change", method, options)
-    options = {**state.get("options", {}), **{k: v for k, v in options.items() if v is not None}}
+    options = state["options"]
     graph_method = state["stages"]["graph"]["method"]
     try:
         if graph_method == "new":
