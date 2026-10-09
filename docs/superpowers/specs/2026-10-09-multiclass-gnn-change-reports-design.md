@@ -2,7 +2,9 @@
 
 Date: 2026-10-09
 
-Status: Conversational design approved; written specification awaiting review.
+Status: Written specification approved on 2026-10-09. Subsequent user instructions
+clarify plain-language labels and independently inspectable stage PNGs; these
+requirements are incorporated below. Native execution remains selected.
 
 ## Intent and approved constraints
 
@@ -255,6 +257,51 @@ Keep derived change-conversion edges in the annotated result graph, separate
 from RGNN input relations: feeding labels back as input edges would leak the
 answer. Version graph contracts, relation definitions, and tensor indices together.
 
+## Plain-language legends and change names
+
+Technical identifiers remain stable in scientific files. PNGs, report indexes,
+and CLI summaries use the following edge labels and one-sentence explanations:
+
+| Internal relation | Display label | Explanation |
+| --- | --- | --- |
+| `touches` | Share a border | These areas have a common boundary. |
+| `near` | Nearby buildings | These buildings are close but do not share a border. |
+| `context_near` | Nearby areas | These areas are close but do not share a border. |
+| `t_primary_fwd`, `t_primary_bwd` | Main match across years | These areas have a main correspondence between the two images. |
+| `t_overlap_fwd`, `t_overlap_bwd` | Partial overlap across years | These areas overlap, but the match is weaker. |
+| derived conversion edge | Class change | Image evidence suggests this area changed from one class to another. |
+
+Use visible arrows and actual year labels for direction, rather than exposing
+`fwd`/`bwd`. Pair edge colors with solid/dashed/dotted line styles and a distinct
+arrow style, so color alone is not needed. Keep class colors consistent across
+segmentation, graphs, matching, and change reports. Spatial graph legends include
+only their spatial edge kinds; temporal and conversion views explain their own
+edge kinds separately. These are visual labels, not changes to graph meaning.
+
+Class names in user-facing text are Buildings, Roads, Trees, Grass/shrubs,
+Cropland, Bare ground, Paved areas, Water, Unknown, and No image data. Avoid
+underscores, class IDs without names, and unexplained scientific terminology.
+
+Generic change labels are Appeared, Disappeared, Expanded, Shrank, Changed shape,
+Changed class, Unchanged, Needs review, and Cannot assess. Where evidence
+supports a more familiar specific description, use New building, Building grew,
+Building shrank, Building disappeared, Road added, Road removed, Road got wider,
+Road got narrower, More tree cover, Less tree cover, Water appeared, Water
+disappeared, Water expanded, and Water shrank. Class conversions display their
+two class names, for example `Grass/shrubs -> Buildings`, with the same readable
+arrow in the PNG. Do not infer a cause from a simpler label.
+
+Structural labels are One area split, Areas joined, Complex match, Connections
+changed, and Nearby areas changed. State `Matching difference` or `Context
+observation` beside structural-only results so they do not imply physical change.
+
+Use a separate evidence/model status badge: Strong image evidence, Candidate,
+GNN prediction, Needs review, or Cannot assess. Display `Season may explain this`
+for seasonal ambiguity. Label probabilities `GNN change score`, not accuracy.
+Explain `insufficient_data` as `Not enough training examples`, with changed and
+unchanged target counts. Explain training-only as `Trained on this area; not
+independently tested`. Keep exact technical statuses available in the index.
+
 ## GNN extension and checkpoint behavior
 
 Retain the existing RGNN encoder and add task-specific binary output heads.
@@ -334,6 +381,26 @@ Tables retain every node and edge even when a panel explicitly samples links.
 All-masked or insufficient-data runs still write visual status outputs; never
 display untrained scores or hide unavailable classes from legends.
 
+Stage verification PNGs must be available before change detection is run:
+
+- At segmentation completion, save a separate PNG for every input image under
+  `results/segmentation/<year>/<image>/segmentation.png`. Show original RGB,
+  semantic segment coloring, visible segment boundaries, and a segment-type
+  legend including unknown/nodata. Keep the full-resolution categorical rasters.
+- At graph completion, save a separate PNG for every image graph under
+  `results/graphs/<method>/<year>/<image>/graph.png` and one for each annual graph
+  under `results/graphs/<method>/<year>/annual_graph.png`. Show segments, nodes,
+  and edge kinds over RGB, with a segment-type legend and a separate plain-language
+  edge legend. Render existing spatial edges only; do not invent temporal links
+  in an annual graph. Include node/edge counts and units.
+- Standalone `pipeline segment` and `pipeline graph` commands produce these PNGs
+  and a named result index without needing `pipeline change`. Later stages retain
+  these files. Combined overviews supplement these separate stage PNGs.
+
+Make legends readable on small and rectangular images: put them in an expanded
+canvas outside the image, wrap text, and preserve image aspect ratio. An empty
+graph still gets a PNG with its status, class legend, and zero edge counts.
+
 ## One combined change PNG
 
 Write `results/change_report.png` as the primary result. Start with before/after
@@ -403,6 +470,10 @@ layouts, valid masks, geometry holes, non-square images, readable labels, empty
 reports, absent registration landmarks, and report-budget failure. Verify event
 counts and IDs across raster/vector/table/PNG index artifacts. Open and visually
 inspect rendered PNGs; file existence alone is insufficient.
+Verify standalone segmentation and graph commands generate their separate PNGs,
+retain them after change/resume, and provide both class and relevant edge legends.
+Check that small canvases do not crop legend text, and that technical identifiers
+do not replace plain-language labels in the rendered output.
 
 Run the project's complete test suite after the extension. Then execute the real
 2013-versus-2023 tile_00002 pair, followed by the seven-tile folders, using new
