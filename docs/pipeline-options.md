@@ -7,9 +7,9 @@ The general pipeline lives in `pipelines/semantic_temporal/runtime/`. It accepts
 | Segmentation `old` | Existing SAM 2.1 + OpenEarthMap FasterSeg, automatic Stage 2R refinement |
 | Segmentation `new` | Local SegFormer, Delineate Anything v2, multi-scale evidence and region refinement |
 | Graph `old` | Existing Stage 3 adjacency and Stage 4 overlap ownership |
-| Graph `new` | Connected regions, adjacency and metric building-near edges |
-| Change `classical` | Existing Stage 5 rules for old graphs; semantic image evidence for new graphs |
-| Change `gnn` | Relational GNN with classical building construction/extension pseudo labels |
+| Graph `new` | Connected regions, adjacency, nearby buildings and nearby areas |
+| Change `classical` | All-class two-sided image evidence; legacy Stage 5 reports retained separately |
+| Change `gnn` | Existing relational GNN encoder with sixteen class gain/loss heads |
 
 All eight segmentation x graph x change combinations are supported through explicit adapters. Old graph objects may remain multipart; the new graph adapter splits disconnected objects and records lineage. New segmentation uses a method-defined 2x grid: this does not increase physical detail.
 
@@ -79,9 +79,11 @@ Explicit memory budgets protect large inputs: `--max-pixels` defaults to 16 mill
 
 ## GNN behavior
 
-Choose `--change gnn`; this generates classical pseudo labels first. Training needs both confident changed and persistent buildings. Otherwise status is `insufficient_data` and predictions are withheld. A single overlapping area can train but is marked `training_only`; an independent held-out score is not reported. At least three non-overlapping groups with both label classes enable grouped validation/test folds. Fold normalization is fitted only on training nodes; cross-group messages are excluded. Agreement with pseudo labels is not human-audited accuracy.
+Choose `--change gnn`; all-class image evidence and masked targets are generated first. Each of the sixteen gain/loss heads trains only with reliable changed and unchanged examples. Unsupported tasks export null scores and are shown as unavailable. Training on one overlapping area is `training_only`; independent grouped folds need at least three groups with both labels. Held-out agreement with pseudo labels is not human-audited accuracy. Specific change subtypes are derived from images and graph correspondence, while GNN heads score class gains/losses.
 
-Use `--gnn-checkpoint PATH` for compatible saved weights-only inference. Each trained checkpoint includes feature schema, normalization, units, settings and a hash. There is no universal project-specific trained GNN to download. `--gnn-epochs` and `--gnn-hidden` control training.
+Use `--gnn-checkpoint PATH` for a compatible sixteen-task weights-only checkpoint. Task order, relation schema, normalization, units, head support and content hashes are validated. Legacy scalar checkpoints retain their original legacy runtime profile and cannot be silently reinterpreted as all-class heads. `--gnn-epochs` and `--gnn-hidden` control training. There is no universal project-specific trained GNN to download.
+
+Use `--change-policy policy.json` for validated partial evidence thresholds, `--reviewed-targets reviewed.csv` for eligible reviewed labels, and `--max-report-pixels` for the complete report budget (default 128000000). Policy/label/checkpoint changes rebuild change only. Budget/style changes rerender unchanged verified science. `run.json` distinguishes scientific and render status; a render failure retains completed scientific artifacts.
 
 ## Models, requirements and outputs
 
@@ -95,3 +97,9 @@ The downloader explicitly acquires and hash-verifies required old and new model 
 Outputs include `run.json`, resolved context/registration and model paths/hashes, canonical segmentation rasters and lineage, per-tile and annual graph JSON/NPZ, temporal graph, classical events/targets, optional GNN checkpoint/report, `validation.json`, `preview_index.json` and `previews/`. Areas use recorded units; GeoJSON is exported to WGS84 only when a CRS exists. Two-year previews show separate actual-year panels.
 
 See [validation evidence](pipeline-validation.md). Scientific accuracy on arbitrary new imagery still requires independent assessment; historic published scores are not transferred to new runs.
+
+## All-class PNG results and registration
+
+See [All-class change results](all-class-change-results.md) for native 2013/2023 commands, folders containing only PNGs and placement CSVs, separate segmentation/graph PNGs, landmark/object matching, plain-language legends, reviewed-label format and the single combined change report. Start at `results/index.json`. ?No image data? is not a displayed segment class; empty coverage is excluded internally.
+
+Mapped-image automatic registration reuses the existing phase-guided SIFT/RANSAC method. `--registration-max-residual` explicitly changes the default 2-unit landmark tolerance; inspect fitted residuals and the matching PNG. `--harmonize-images` matches paired brightness/sharpness before segmentation, while reports preserve original RGB.

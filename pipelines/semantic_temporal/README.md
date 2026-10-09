@@ -158,3 +158,7 @@ environment/             exact and minimal environment specifications
 data/, checkpoints/      put the inputs here (see section 2)
 PATCHES.diff             package edits vs the code of the successful run
 ```
+
+## General all-class pipeline
+
+The historical reproduction above remains frozen. For arbitrary folders or single-image pairs, use `run_pipeline.py` or `python -m src pipeline`. The general runtime extends the existing RGNN with sixteen class gain/loss heads and produces separate stage PNGs, matching views and one combined change report. See [All-class native commands, results and registration](../../docs/all-class-change-results.md). Unsupported tasks show unavailable scores; the historical study metrics above are not scores for a new run.

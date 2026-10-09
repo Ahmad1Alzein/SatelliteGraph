@@ -476,3 +476,7 @@ instead of `--registration-json` for other datasets when automatic image matchin
 has enough reliable correspondences using the saved PNGs and georeference; the
 original source GeoTIFFs need not still be present. With `--project-root`, relative
 config paths are resolved from that project root.
+
+## All-class native change pipeline
+
+The general pipeline now extends the existing RGNN to eight land-cover classes with sixteen gain/loss tasks, retains separate segmentation and graph PNGs, and generates registration/object-matching views and one combined paired-crop `change_report.png`. Start with [All-class change results and native commands](docs/all-class-change-results.md). The original image/folder pipeline and frozen study remain available.

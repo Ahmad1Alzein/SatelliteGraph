@@ -154,3 +154,6 @@ published for each old/new node pair. Spatial_edges, temporal_edges, and
 change_edges retain the underlying adjacency/matching/change evidence.
 
 Use a new output folder when changing an input, year, or configuration.
+
+ALL-CLASS 2013 / 2023 RESULTS
+See docs/all-class-change-results.md for audited sample preparation, native one-pair/full-folder commands, metadata-only registration, all-class GNN support and render-only retries. Open <output>/results/index.json and <output>/results/change_report.png. Separate segmentation and graph PNGs are retained beneath <output>/results/. No additional models are required in the verified environment.
