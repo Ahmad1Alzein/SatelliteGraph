@@ -14,6 +14,7 @@ from .contracts import CLASSES,SCHEMA,GraphArtifact
 from .storage import atomic_json,read_json,save_manifest
 from .adapters import read_band,CANONICAL_TO_OLD
 from .segmentation.parcels import shape_metrics
+from .change_contracts import RELATION_PROFILE
 
 
 def transform_geometry(geom,affine):
@@ -76,6 +77,22 @@ def _edges(nodes,touches,method,units,near_distance=25.,near_k=6):
                 distance=shapes[i].distance(shapes[int(raw)])
                 if ident!=other and key not in pairs and distance<=near_distance: candidates.append((distance,other))
             for distance,other in sorted(candidates)[:near_k]: pairs[tuple(sorted((ident,other)))]=('near',0.,distance)
+        ids=[n['id'] for n in nodes if n['class_id'] in range(1,9)]
+        shapes=[geoms[i] for i in ids];tree=STRtree(shapes)
+        # Select six candidates per node before unioning; another node's prior
+        # selection must not cause us to select a seventh nearest candidate.
+        selected={}
+        for i,ident in enumerate(ids):
+            candidates=[]
+            for raw in tree.query(shapes[i].buffer(near_distance)):
+                other=ids[int(raw)];key=tuple(sorted((ident,other)))
+                if ident==other or key in pairs: continue
+                if by_id[ident]['class_id']==by_id[other]['class_id']==1: continue
+                distance=shapes[i].distance(shapes[int(raw)])
+                if distance<=near_distance: candidates.append((distance,other))
+            for distance,other in sorted(candidates)[:near_k]:
+                selected[tuple(sorted((ident,other)))]=('context_near',0.,distance)
+        pairs.update(selected)
     edges=[]
     for (a,b),(kind,shared,gap) in sorted(pairs.items()):
         source,target=by_id[a],by_id[b];delta=np.array(target['position'])-source['position'];angle=math.atan2(delta[1],delta[0])
@@ -84,7 +101,7 @@ def _edges(nodes,touches,method,units,near_distance=25.,near_k=6):
                       'boundary_frac_target':shared/max(target['perimeter'],1e-9),
                       'color_contrast':float(np.linalg.norm(np.array(source['rgb_mean'])-target['rgb_mean'])/255),
                       'same_class':source['class_id']==target['class_id'],'dir_sin':math.sin(angle),'dir_cos':math.cos(angle),
-                      'corner_contact':kind=='near' and gap<1e-9})
+                      'corner_contact':kind in ('near','context_near') and gap<1e-9})
     return edges
 
 
@@ -115,11 +132,11 @@ def _persist(directory,nodes,edges,grid,year,method,**extra):
     reverse=attributes.copy();reverse[:,[3,4]]=attributes[:,[4,3]];reverse[:,-2:]*=-1
     edge_index=np.stack((np.r_[source,target],np.r_[target,source]))
     np.savez_compressed(paths['tensors'],x=x,edge_index=edge_index,edge_attr=np.concatenate((attributes,reverse)),
-                        edge_type=np.array([0 if e['edge_type']=='touches' else 1 for e in edges]*2,np.int64),pos=positions,
+                        edge_type=np.array([{'touches':0,'near':1,'context_near':2}[e['edge_type']] for e in edges]*2,np.int64),pos=positions,
                         node_ids=np.array([n['id'] for n in nodes],dtype=str))
     if not np.isfinite(x).all() or not np.isfinite(attributes).all(): raise ValueError('Nonfinite graph features')
-    document={'schema':SCHEMA,'year':year,'method':method,'units':grid.units,'grid':grid,'nodes':nodes,'edges':edges,**extra}
-    atomic_json(paths['graph'],document);atomic_json(paths['features'],{'node_features':NODE_FEATURES,'edge_features':EDGE_FEATURES,'normalized':False,'units':grid.units})
+    document={'schema':SCHEMA,'relation_profile':RELATION_PROFILE,'year':year,'method':method,'units':grid.units,'grid':grid,'nodes':nodes,'edges':edges,**extra}
+    atomic_json(paths['graph'],document);atomic_json(paths['features'],{'node_features':NODE_FEATURES,'edge_features':EDGE_FEATURES,'relations':['touches','near','context_near'],'relation_profile':RELATION_PROFILE,'normalized':False,'units':grid.units})
     pd.DataFrame(nodes).to_csv(paths['nodes'],index=False);pd.DataFrame(edges,columns=list(edges[0]) if edges else ['id','source','target','edge_type']).to_csv(paths['edges'],index=False)
     artifact=GraphArtifact(year,method,directory,grid,paths);atomic_json(directory/'artifact.json',artifact);save_manifest(directory,paths,year=year,method=method)
     return artifact

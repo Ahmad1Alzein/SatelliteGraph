@@ -16,12 +16,50 @@ from .contracts import TemporalArtifact,SCHEMA
 from .storage import atomic_json,read_json,save_manifest,load_segmentation,write_raster
 from .graphs import NODE_FEATURES,EDGE_FEATURES
 from .adapters import CANONICAL_TO_OLD
+from .change_contracts import RELATIONS,RELATION_PROFILE,TASKS
+
+TEMPORAL_EDGE_FEATURES=['iou','fraction_source','fraction_target','overlap_score',
+    'shared_area','class_agreement','confidence_ordinal','frame_roof','roof_shift_x','roof_shift_y']
+
+
+def temporal_edge_features(edge, *, same_class):
+    fa=float(edge.get('fraction_source',edge.get('source_overlap_fraction',0.)))
+    fb=float(edge.get('fraction_target',edge.get('target_overlap_fraction',0.)))
+    shift=edge.get('roof_shift',[0.,0.])
+    values=np.array([edge.get('iou',0.),fa,fb,edge.get('overlap_score',math.sqrt(max(0,fa*fb))),
+        edge.get('shared_area',edge.get('intersection_m2',0.)),float(same_class),
+        {'high':2.,'medium':1.,'low':0.}.get(edge.get('confidence'),1.),
+        float(edge.get('frame')=='roof'),shift[0],shift[1]],np.float32)
+    backward=values.copy();backward[[1,2]]=values[[2,1]];backward[8:]*=-1
+    return values,backward
+
+
+def build_primary_components(nodes,edges,years):
+    by_id={n['id']:n for n in nodes};neighbors={key:set() for key in by_id}
+    for e in edges:
+        if e.get('edge_role')!='primary': continue
+        neighbors[e['source']].add(e['target']);neighbors[e['target']].add(e['source'])
+    result=[];seen=set()
+    for key in sorted(by_id):
+        if key in seen: continue
+        stack=[key];members=[]
+        while stack:
+            node=stack.pop()
+            if node in seen: continue
+            seen.add(node);members.append(node);stack.extend(sorted(neighbors[node]-seen))
+        before=sorted(k for k in members if by_id[k]['year']==years[0])
+        after=sorted(k for k in members if by_id[k]['year']==years[1])
+        kind=('unmatched' if not before or not after else 'one_to_one' if len(before)==len(after)==1
+              else 'split' if len(before)==1 else 'merge' if len(after)==1 else 'many_to_many')
+        result.append({'id':f'match-{len(result)+1:06d}','kind':kind,
+                       'source_nodes':before,'target_nodes':after})
+    return result
 
 
 def _roof_polygons(docs,polygons,grid,context):
     from .roof_offsets import roof_offset_field,offset_building_labels
     from shapely.affinity import translate
-    if grid.units!='metres': return polygons[0],{}
+    if grid.units!='metres' or not polygons[0] or not polygons[1]: return polygons[0],{}
     bounds=unary_union(polygons[0]+polygons[1]).bounds;resolution=abs(grid.affine[0])
     sx=1;sy=-1 if grid.crs else 1
     affine=Affine(resolution,0,bounds[0],0,sy*resolution,bounds[3] if sy<0 else bounds[1])
@@ -69,7 +107,13 @@ def build_temporal_graph(graphs,context):
         matched=match_snapshots(documents[0],documents[1],polygons[0],polygons[1],MatchPolicy(**old_configuration(context).get('stage5',{}).get('matching',{})))
         for link in matched['links']:
             a,b=docs[0]['nodes'][link['i']],docs[1]['nodes'][link['j']]
-            edges.append({'source':a['id'],'target':b['id'],'relation':link['relation'],**link['evidence']})
+            evidence=link['evidence']
+            edges.append({'source':a['id'],'target':b['id'],'relation':link['relation'],**evidence,
+                          'edge_role':'primary','frame':'ground','roof_shift':[0.,0.],
+                          'confidence':'high' if evidence.get('score',0)>=.7 else 'medium',
+                          'fraction_source':evidence.get('source_overlap_fraction',0.),
+                          'fraction_target':evidence.get('target_overlap_fraction',0.),
+                          'shared_area':evidence.get('intersection_m2',0.)})
     else:
         tree=STRtree(polygons[1])
         roof_polygons,roof_offsets=_roof_polygons(docs,polygons,graphs[0].grid,context)
@@ -90,23 +134,31 @@ def build_temporal_graph(graphs,context):
                               'fraction_source':fa,'fraction_target':fb,'confidence':confidence,'edge_role':'primary' if confidence!='low' else 'secondary'})
     for e in edges: e.update(source_year=graphs[0].year,target_year=graphs[1].year,delta_years=graphs[1].year-graphs[0].year)
     directory=context.output/'temporal';directory.mkdir(parents=True,exist_ok=True)
-    paths={k:directory/name for k,name in {'graph':'graph.json','tensors':'graph_tensors.npz','features':'feature_spec.json','targets':'training_targets.csv'}.items()}
-    atomic_json(paths['graph'],{'schema':SCHEMA,'years':[g.year for g in graphs],'method':graphs[0].method,'units':graphs[0].grid.units,
+    paths={k:directory/name for k,name in {'graph':'graph.json','tensors':'graph_tensors.npz','features':'feature_spec.json','targets':'training_targets.csv','components':'temporal_components.json'}.items()}
+    components=build_primary_components(nodes,edges,[g.year for g in graphs])
+    atomic_json(paths['components'],components)
+    atomic_json(paths['graph'],{'schema':SCHEMA,'relation_profile':RELATION_PROFILE,'years':[g.year for g in graphs],'method':graphs[0].method,'units':graphs[0].grid.units,
                 'annual_artifacts':[str(g.directory/'artifact.json') for g in graphs],'nodes':nodes,'temporal_edges':edges,
+                'primary_components':components,
                 'common_coverage_area':common.area,'registration':context.options.get('registration',{'method':'georeference_only','accuracy_status':'not_independently_verified'})})
     x=[];ei=[];ea=[];et=[];node_ids=[];offset=0
     for g in graphs:
         with np.load(g.paths['tensors'],allow_pickle=False) as t:
-            x.append(t['x']);ei.append(t['edge_index']+offset);ea.append(t['edge_attr']);et.append(t['edge_type']);node_ids.extend(t['node_ids'].tolist());offset+=len(t['x'])
+            x.append(np.column_stack([t['x'],np.full(len(t['x']),float(g.year==graphs[1].year))]));ei.append(t['edge_index']+offset)
+            ea.append(np.pad(t['edge_attr'],((0,0),(0,1))));et.append(t['edge_type']);node_ids.extend(t['node_ids'].tolist());offset+=len(t['x'])
     index={ident:i for i,ident in enumerate(node_ids)}
     if edges:
         source=[index[e['source']] for e in edges];target=[index[e['target']] for e in edges]
-        temporal=np.zeros((len(edges),len(EDGE_FEATURES)),np.float32)
-        for i,e in enumerate(edges): temporal[i,3:5]=[e.get('fraction_source',e.get('coverage_source',0)),e.get('fraction_target',e.get('coverage_target',0))]
-        reverse=temporal.copy();reverse[:,[3,4]]=temporal[:,[4,3]]
-        ei.append(np.array([source+target,target+source],np.int64));ea.append(np.r_[temporal,reverse]);et.append(np.full(len(edges)*2,2,np.int64))
+        by_id={n['id']:n for n in nodes}
+        features=[temporal_edge_features(e,same_class=by_id[e['source']]['class_id']==by_id[e['target']]['class_id']) for e in edges]
+        temporal=np.stack([f[0] for f in features]);reverse=np.stack([f[1] for f in features])
+        kinds=[3 if e['edge_role']=='primary' else 5 for e in edges]
+        ei.append(np.array([source+target,target+source],np.int64));ea.append(np.r_[temporal,reverse]);et.append(np.array(kinds+[k+1 for k in kinds],np.int64))
     np.savez_compressed(paths['tensors'],x=np.concatenate(x),edge_index=np.concatenate(ei,axis=1),edge_attr=np.concatenate(ea),edge_type=np.concatenate(et),node_ids=np.array(node_ids,dtype=str))
-    atomic_json(paths['features'],{'node_features':NODE_FEATURES,'edge_features':EDGE_FEATURES,'relations':['touches','near','temporal'],'target':'building_change','units':graphs[0].grid.units})
+    atomic_json(paths['features'],{'node_features':NODE_FEATURES+['is_later'],
+        'edge_features':TEMPORAL_EDGE_FEATURES,'spatial_edge_features':EDGE_FEATURES,
+        'temporal_edge_features':TEMPORAL_EDGE_FEATURES,'relation_profile':RELATION_PROFILE,
+        'relations':RELATIONS,'tasks':TASKS,'target':'class_gain_loss','units':graphs[0].grid.units})
     artifact=TemporalArtifact((graphs[0].year,graphs[1].year),directory,paths);atomic_json(directory/'artifact.json',artifact)
     save_manifest(directory,{k:v for k,v in paths.items() if k!='targets'})
     return artifact
