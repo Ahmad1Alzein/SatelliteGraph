@@ -38,6 +38,7 @@ def _persist_result(directory,result):
     atomic_json(directory/'report.json',result)
     paths={'report':directory/'report.json'}
     if result.get('predictions'): paths['predictions']=Path(result['predictions'])
+    if result.get('evaluation_predictions'): paths['evaluation_predictions']=Path(result['evaluation_predictions'])
     if result.get('checkpoint'):
         checkpoint=Path(result['checkpoint'])
         if checkpoint.is_relative_to(directory):
@@ -100,7 +101,7 @@ def _train(x,relations,labels,train,val,settings):
     return model,probabilities,threshold
 
 
-def run_gnn(graph,context,*,checkpoint=None):
+def _run_legacy_gnn(graph,context,*,checkpoint=None):
     schema=read_json(graph.paths['features']);document=read_json(graph.paths['graph'])
     with np.load(graph.paths['tensors'],allow_pickle=False) as data:
         x=data['x'];edge_attr=data['edge_attr'];edge_index=data['edge_index'];edge_type=data['edge_type'];ids=data['node_ids']
@@ -165,5 +166,133 @@ def run_gnn(graph,context,*,checkpoint=None):
     predictions=directory/'predictions.csv'
     pd.DataFrame({'gid':ids,'probability':probabilities,'prediction':np.where(eligible,(probabilities>=threshold).astype(int),-1),'eligible_building_target':eligible}).to_csv(predictions,index=False)
     result['predictions']=str(predictions);result['threshold']=threshold
+    _persist_result(directory,result)
+    return result
+
+
+def _node_groups(document,context,ids):
+    tile_groups=evaluation_groups(context);parent={g:g for g in tile_groups.values()}
+    def find(g):
+        while parent[g]!=g:parent[g]=parent[parent[g]];g=parent[g]
+        return g
+    memberships={}
+    for node in document['nodes']:
+        candidates=sorted({tile_groups[m['tile']] for m in node.get('members',[]) if m.get('tile') in tile_groups})
+        memberships[node['id']]=candidates
+        for other in candidates[1:]:
+            a,b=sorted((find(candidates[0]),find(other)));parent[b]=a
+    return np.array([find(memberships[gid][0]) if memberships[gid] else 'unresolved_shared_group' for gid in ids],str)
+
+
+def _check_task_normalization(norm,x,relations):
+    def vector(value,length,positive=False):
+        array=np.asarray(value,float)
+        if array.shape!=(length,) or not np.isfinite(array).all() or (positive and (array<=0).any()):
+            raise ValueError('GNN checkpoint normalization schema is invalid')
+    vector(norm.get('node_mean'),x.shape[1]);vector(norm.get('node_std'),x.shape[1],True)
+    if set(norm.get('relations',{}))!=set(relations):raise ValueError('GNN checkpoint relation schema is invalid')
+    for name,(_,ea) in relations.items():
+        vector(norm['relations'][name].get('mean'),ea.shape[1]);vector(norm['relations'][name].get('std'),ea.shape[1],True)
+
+
+def run_gnn(graph,context,*,checkpoint=None):
+    from .change_contracts import TASKS,RELATIONS,RELATION_PROFILE,CHANGE_SCHEMA,KNOWN_CLASSES,load_change_policy
+    from .gnn_training import train_tasks,tensor_inputs
+    schema=read_json(graph.paths['features'])
+    if schema.get('relation_profile')!=RELATION_PROFILE:
+        return _run_legacy_gnn(graph,context,checkpoint=checkpoint)
+    if schema.get('tasks')!=list(TASKS) or schema.get('relations')!=list(RELATIONS):
+        raise ValueError('All-class GNN feature/target schema is incompatible')
+    document=read_json(graph.paths['graph']);by_id={n['id']:n for n in document['nodes']}
+    with np.load(graph.paths['tensors'],allow_pickle=False) as t:
+        x=t['x'];ei=t['edge_index'];ea=t['edge_attr'];et=t['edge_type'];ids=t['node_ids']
+    if len(set(ids))!=len(ids) or set(ids)!=set(by_id):raise ValueError('GNN tensor node IDs do not match the graph')
+    if not np.isin(et,range(len(RELATIONS))).all():raise ValueError('Unknown GNN input relation; derived changes cannot be model inputs')
+    relations={name:(ei[:,et==i],ea[et==i]) for i,name in enumerate(RELATIONS)}
+    policy=load_change_policy(context.options.get('change_policy'))
+    eligible=np.zeros((len(ids),len(TASKS)),bool);labels=np.full(eligible.shape,-1,np.int64)
+    index={gid:i for i,gid in enumerate(ids)};reasons={};first,last=document['years']
+    catalog_path=graph.directory/'classical_changes.json'
+    catalog=read_json(catalog_path) if catalog_path.is_file() else {}
+    node_changes={r['gid']:r for r in catalog.get('node_changes',[])}
+    for i,gid in enumerate(ids):
+        node=by_id[gid];klass=node['class_id']
+        if klass not in KNOWN_CLASSES:continue
+        task=KNOWN_CLASSES[klass]+('_gain' if node['year']==last else '_loss')
+        base=(node['observed_fraction']>=policy['observed_fraction'] and
+              node['known_counterpart_fraction']>=policy['known_fraction'] and node['confidence']>=policy['reliable_confidence'])
+        eligible[i,TASKS.index(task)]=node_changes.get(gid,{}).get('eligible',base)
+    targets=pd.read_csv(graph.paths['targets']) if graph.paths['targets'].is_file() else pd.DataFrame()
+    if 'task' in targets:
+        if targets.duplicated(['gid','task']).any():raise ValueError('Duplicate GNN target node/task rows')
+        for row in targets.to_dict('records'):
+            if row['gid'] not in index or row['task'] not in TASKS:raise ValueError('Unknown GNN target node/task')
+            i=index[row['gid']];j=TASKS.index(row['task']);reasons[i,j]=str(row.get('reason','unassessed'))
+            if eligible[i,j] and row['label'] in (0,1) and row['confidence']>=policy['reliable_confidence']:
+                labels[i,j]=int(row['label'])
+    groups=_node_groups(document,context,ids)
+    settings={'hidden':int(context.options.get('gnn_hidden') or 64),'epochs':int(context.options.get('gnn_epochs') or 300),
+              'edge_dim':ea.shape[1],'seed':0}
+    directory=graph.directory/'gnn';directory.mkdir(exist_ok=True)
+    result={'positive_targets':int((labels==1).sum()),'negative_targets':int((labels==0).sum()),
+        'audit_status':'not_provided','target_schema':CHANGE_SCHEMA,'predictions':None,'checkpoint':None,
+        'evaluation':{'status':'not_independently_evaluated','reason':'Pseudo labels are image-rule outputs',
+                      'independent_human_accuracy':False},'groups':sorted(set(groups))}
+    if checkpoint:
+        checkpoint=Path(checkpoint);metadata=read_json(checkpoint.with_suffix('.json'))
+        if (metadata.get('schema')!=schema or metadata.get('target_schema')!=CHANGE_SCHEMA
+                or metadata.get('task_order')!=list(TASKS) or metadata.get('relation_profile')!=RELATION_PROFILE):
+            raise ValueError('GNN checkpoint feature/target schema is incompatible; legacy building checkpoints require a compatible legacy graph')
+        if sha256(checkpoint)!=metadata.get('state_sha256'):raise ValueError('GNN checkpoint hash mismatch')
+        heads=copy.deepcopy(metadata.get('head_status',{}));norm=metadata['normalization'];settings=metadata['settings']
+        if set(heads)!=set(TASKS):raise ValueError('GNN checkpoint task schema is incompatible')
+        for task,head in heads.items():
+            if head.get('available'):
+                threshold=head.get('threshold')
+                if (not head.get('positive_targets',0) or not head.get('negative_targets',0)
+                        or not isinstance(threshold,(int,float)) or not np.isfinite(threshold) or not 0<=threshold<=1):
+                    raise ValueError('GNN checkpoint head support/threshold schema is invalid')
+                head.update(status='inference',reason='Compatible saved class-change head')
+        _check_task_normalization(norm,x,relations)
+        tensor,r=tensor_inputs(x,relations,norm)
+        model=RGNN(x.shape[1],r,hidden=settings['hidden'],edge_dim=settings['edge_dim'],tasks=TASKS)
+        model.load_state_dict(torch.load(checkpoint,map_location='cpu',weights_only=True),strict=True);model.eval()
+        with torch.no_grad():probabilities=torch.sigmoid(model(tensor,r)).numpy()
+        evaluation=np.full(probabilities.shape,np.nan);eval_decisions=np.full(probabilities.shape,-1)
+        for j,task in enumerate(TASKS):
+            if not heads[task]['available']:probabilities[:,j]=np.nan
+        result.update(status='inference',checkpoint=str(checkpoint),folds=0)
+    else:
+        trained=train_tasks(x,relations,labels,eligible,groups,settings)
+        heads=trained['heads'];probabilities=trained['probabilities'];evaluation=trained['evaluation_probabilities'];eval_decisions=trained['evaluation_predictions']
+        result.update(status=trained['status'],folds=len(trained['folds']))
+        if trained['folds']:
+            result['evaluation']={'status':'grouped_pseudo_label_agreement','folds':trained['folds'],'independent_human_accuracy':False}
+        if trained['model'] is not None:
+            checkpoint=directory/'model.pt'
+            save_gnn_checkpoint(checkpoint,trained['model'],schema,trained['normalization'],trained['settings'])
+            metadata=read_json(checkpoint.with_suffix('.json'))
+            metadata.update(target_schema=CHANGE_SCHEMA,task_order=list(TASKS),relation_profile=RELATION_PROFILE,
+                            head_status=heads,target='Per-class gain/loss pseudo labels',
+                            threshold_source='Fixed 0.5 for deployment; held-out fold thresholds are stored separately')
+            atomic_json(checkpoint.with_suffix('.json'),metadata);result['checkpoint']=str(checkpoint)
+    rows=[];evaluation_rows=[]
+    for i,gid in enumerate(ids):
+        for j,task in enumerate(TASKS):
+            available=bool(heads[task]['available'] and eligible[i,j])
+            score=float(probabilities[i,j]) if available else None
+            row={'gid':gid,'task':task,'probability':score,
+                 'prediction':int(score>=heads[task]['threshold']) if score is not None else -1,
+                 'eligible':bool(eligible[i,j]),'reason':reasons.get((i,j),'different_class_or_year') if not available else heads[task]['reason'],
+                 'status':heads[task]['status'] if eligible[i,j] else 'ineligible','probability_source':'deployment'}
+            rows.append(row)
+            if available and np.isfinite(evaluation[i,j]):
+                evaluation_rows.append({**row,'probability':float(evaluation[i,j]),'prediction':int(eval_decisions[i,j]),
+                                        'probability_source':'held_out'})
+    predictions=directory/'predictions.csv';pd.DataFrame(rows,columns=['gid','task','probability','prediction','eligible','reason','status','probability_source']).to_csv(predictions,index=False)
+    evaluation_path=directory/'evaluation_predictions.csv'
+    pd.DataFrame(evaluation_rows,columns=['gid','task','probability','prediction','eligible','reason','status','probability_source']).to_csv(evaluation_path,index=False)
+    result.update(predictions=str(predictions),evaluation_predictions=str(evaluation_path),head_status=heads,
+                  reason='See per-task support; unavailable heads produce no scores')
     _persist_result(directory,result)
     return result

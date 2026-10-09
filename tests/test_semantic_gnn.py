@@ -18,18 +18,20 @@ def test_single_pair_trains_without_heldout_claims_and_checkpoint_roundtrip(tmp_
     second=run_gnn(artifact,context,checkpoint=first['checkpoint'])
     loaded=pd.read_csv(second['predictions'])
     assert second['status']=='inference'
-    assert np.allclose(trained.probability,loaded.probability)
+    assert np.allclose(trained.probability,loaded.probability,equal_nan=True)
     features=read_json(artifact.paths['features']);features['units']='pixels';atomic_json(artifact.paths['features'],features)
     with pytest.raises(ValueError,match='schema'): run_gnn(artifact,context,checkpoint=first['checkpoint'])
 
 
-def test_no_positive_targets_returns_counts_and_no_predictions(tmp_path):
+def test_no_positive_targets_returns_counts_and_explicit_unavailable_predictions(tmp_path):
     from pipelines.semantic_temporal.runtime.gnn import run_gnn
     artifact,context=temporal_fixture(tmp_path)
     pd.DataFrame([{'gid':'irrelevant','label':0,'confidence':1,'source':'rule'}]).to_csv(artifact.paths['targets'],index=False)
     result=run_gnn(artifact,context)
     assert result['status']=='insufficient_data' and result['positive_targets']==0
-    assert result['predictions'] is None
+    predictions=pd.read_csv(result['predictions'])
+    assert predictions.probability.isna().all() and (predictions.prediction==-1).all()
+    assert result['checkpoint'] is None
 
 
 def test_validation_detects_deleted_gnn_predictions(tmp_path):
