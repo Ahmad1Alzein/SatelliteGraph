@@ -92,4 +92,8 @@ def render_outputs(context,stage):
         preview=directory/f'{number:04d}.png';_title(image,title).save(preview);paths[str(number)]=preview
     index={'stage':stage,'years':sorted(y for y in years if y is not None),'units':sorted(u for u in units if u),
            'classes':CLASSES,'previews':{k:str(v.relative_to(context.output)) for k,v in paths.items()}}
-    atomic_json(context.output/'preview_index.json',index);return paths
+    atomic_json(context.output/'preview_index.json',index)
+    if stage in ('segmentation','graph'):
+        from .reports.stages import render_stage_results
+        paths.update(render_stage_results(context,stage))
+    return paths

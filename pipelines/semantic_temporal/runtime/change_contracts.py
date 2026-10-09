@@ -16,7 +16,7 @@ RELATIONS = ('touches', 'near', 'context_near', 't_primary_fwd', 't_primary_bwd'
              't_overlap_fwd', 't_overlap_bwd')
 CLASS_LABELS = {0: 'Unknown', 1: 'Buildings', 2: 'Roads', 3: 'Trees',
                 4: 'Grass/shrubs', 5: 'Cropland', 6: 'Bare ground',
-                7: 'Paved areas', 8: 'Water', 255: 'No image data'}
+                7: 'Paved areas', 8: 'Water'}
 EDGE_LABELS = {'touches': 'Share a border', 'near': 'Nearby buildings',
                'context_near': 'Nearby areas',
                't_primary_fwd': 'Main match across years',
@@ -75,7 +75,7 @@ def load_change_policy(path: Path | None) -> dict:
 def change_label(event: dict) -> str:
     kind = event.get('kind', 'uncertain')
     if kind in ('conversion', 'class_conversion'):
-        return f"{CLASS_LABELS[int(event['source_class'])]} → {CLASS_LABELS[int(event['target_class'])]}"
+        return f"{CLASS_LABELS[int(event['source_class'])]} â†’ {CLASS_LABELS[int(event['target_class'])]}"
     structural = {'split': 'One area split', 'merge': 'Areas joined',
                   'many_to_many': 'Complex match', 'connectivity': 'Connections changed',
                   'neighborhood': 'Nearby areas changed'}

@@ -43,7 +43,17 @@ def _probabilities(artifact,image,context,models):
 
 
 def load_comparison(graph,context):
-    doc=read_json(graph.paths['graph']);annuals=[read_json(read_json(p)['paths']['graph']) for p in doc['annual_artifacts']]
+    return _load_document(read_json(graph.paths['graph']),context)
+
+
+def load_annual_frame(graph,context):
+    doc=read_json(graph.paths['graph'])
+    return _load_document({'annual_artifacts':[str(graph.directory/'artifact.json')],
+                           'nodes':doc['nodes'],'units':doc['units'],'years':[graph.year]},context)
+
+
+def _load_document(doc,context):
+    annuals=[read_json(read_json(p)['paths']['graph']) for p in doc['annual_artifacts']]
     nodes=doc['nodes'];geometries=[shape(n['geometry']) for n in nodes]
     base=annuals[0]['grid'];resolution=abs(base['affine'][0])
     bounds=unary_union(geometries).bounds if geometries else (base['affine'][2],base['affine'][5],base['affine'][2]+resolution,base['affine'][5]+resolution)
