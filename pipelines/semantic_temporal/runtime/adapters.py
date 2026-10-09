@@ -148,6 +148,9 @@ def run_old_segmentation(context):
             atomic_json(directories[0]/'runtime_grid.json',grid)
             artifact=load_old_segmentation(directories[0],replace(tile,grid=grid))
             paths=dict(artifact.paths);paths['image']=artifact.directory/'rgb.tif';write_raster(paths['image'],rgb.transpose(2,0,1),grid)
+            original,_,_=prepare_tile(tile,context,model=False)
+            paths['original_image']=artifact.directory/'original_rgb.tif'
+            write_raster(paths['original_image'],original.transpose(2,0,1),grid)
             artifact=replace(artifact,paths=paths);atomic_json(artifact.directory/'artifact.json',artifact);save_manifest(artifact.directory,paths,method='old')
             artifacts.append(artifact)
     return artifacts

@@ -107,8 +107,10 @@ def prepare_comparison(context):
     prepared=replace(context,options=options)
     if len(context.years)==2:
         registration=None
+        moving=[]; reference=[]; control_keys=[]
         if options.get('registration_json'):
             controls=read_json(options['registration_json'])
+            moving=controls['moving_xy']; reference=controls['reference_xy']
             registration=fit_registration(controls['moving_xy'],controls['reference_xy'],
                                           max_residual_m=float(controls.get('max_residual_m',2.0)))
         elif options.get('register_images'):
@@ -121,23 +123,70 @@ def prepare_comparison(context):
                 try: m,r=_matched_controls(by_key[a],by_key[b],prepared)
                 except ValueError: continue
                 moving.extend(m);reference.extend(r)
+                control_keys.extend([(a,b)]*len(m))
             if len(moving)<6: raise ValueError('Registration lacks distributed landmarks; supply --registration-json')
             m=np.array(moving);r=np.array(reference)
             _,unique=np.unique(np.round(m,6),axis=0,return_index=True)
-            registration=fit_registration(m[unique],r[unique])
+            moving=m[unique];reference=r[unique]
+            control_keys=[control_keys[i] for i in unique]
+            registration=fit_registration(moving,reference)
         if registration:
             if options['coordinate_units']=='pixels':
                 registration={k.replace('_m2','_pixel2').replace('_m','_pixels'):v for k,v in registration.items()}
             registration['units']=options['coordinate_units']; options['registration']=registration
+            matrix=np.asarray(registration['affine']).reshape(2,3)
+            residuals=np.linalg.norm(np.asarray(moving)@matrix[:,:2].T+matrix[:,2]-reference,axis=1)
+            def native_location(point,year,key=None):
+                candidates=[t for t in tiles if t.year==year and (key is None or t.key==key)]
+                for tile in candidates:
+                    xy=np.asarray(point,float)
+                    if tile.grid.crs and options.get('target_crs')!=tile.grid.crs:
+                        x,y=transform(options['target_crs'],tile.grid.crs,[xy[0]],[xy[1]])
+                        xy=np.array([x[0],y[0]])
+                    elif not tile.grid.crs and tile.grid.physical_pixel_size:
+                        xy=xy/np.asarray(tile.grid.physical_pixel_size)
+                    pixel=(~Affine(*tile.grid.affine))*tuple(xy)
+                    h,w=tile.shape_hw
+                    if key is not None or (0<=pixel[0]<=w and 0<=pixel[1]<=h):
+                        return tile.key,list(pixel)
+                return None,None
+            pairs=[]
+            for index,(m,r,residual,inlier) in enumerate(zip(moving,reference,residuals,registration['inlier_mask'])):
+                keys=control_keys[index] if control_keys else (None,None)
+                mk,mp=native_location(m,context.years[0].year,keys[0])
+                rk,rp=native_location(r,context.years[1].year,keys[1])
+                pairs.append({'id':f'control-{index+1:06d}','moving_tile':mk,'reference_tile':rk,
+                              'moving_native_xy':mp,'reference_native_xy':rp,
+                              'moving_xy':np.asarray(m).tolist(),'reference_xy':np.asarray(r).tolist(),
+                              'inlier':bool(inlier),'residual':float(residual)})
+            atomic_json(context.output/'prepared/registration_controls.json',{
+                'method':'supplied_controls' if options.get('registration_json') else 'mutual_sift_affine_ransac',
+                'units':options['coordinate_units'],'years':[y.year for y in context.years],
+                'pairs':pairs,'diagnostics':registration,
+                'accuracy_status':'in_sample_only_requires_independent_validation'})
         elif not all(has_map):
             # Distinct source pixels require explicit frame alignment, not a guessed identity.
             raise ValueError('Original-pixel comparison needs --register-images or --registration-json')
+        else:
+            atomic_json(context.output/'prepared/registration_controls.json',{
+                'method':'georeference_only','units':options['coordinate_units'],
+                'years':[y.year for y in context.years],'pairs':[],
+                'status':'Feature registration was not performed'})
     prepared=replace(context,options=options)
     atomic_json(context.output/'context.json',prepared)
     return prepared
 
 
-def prepare_tile(tile,context):
+def prepare_tile(tile,context,*,model=True):
+    entry=context.options.get('prepared_inputs',{}).get(tile.key)
+    if entry:
+        import rasterio
+        with rasterio.open(entry['model_rgb' if model else 'original_rgb']) as src:
+            rgb=src.read().transpose(1,2,0)
+        with rasterio.open(entry['valid']) as src: valid=src.read(1)>0
+        value=entry['grid']
+        grid=value if isinstance(value,GridSpec) else GridSpec(value['crs'],tuple(value['affine']),value['units'],tuple(value['physical_pixel_size']) if value.get('physical_pixel_size') else None)
+        return rgb,valid,grid
     rgb,valid=read_tile(tile); h,w=valid.shape
     affine=Affine(*tile.grid.affine); crs=tile.grid.crs; target=context.options.get('target_crs')
     units=context.options.get('coordinate_units',tile.grid.units)

@@ -60,6 +60,10 @@ def segment_tile(tile,context,*,models=None):
     outgrid=replace(grid,affine=tuple(transform)[:6],physical_pixel_size=(pixel,pixel))
     write_raster(paths['labels'],result,outgrid,nodata=0);write_raster(paths['classes'],class_map,outgrid,nodata=255)
     write_raster(paths['valid'],observed.astype(np.uint8),outgrid,nodata=0);write_raster(paths['image'],image.transpose(2,0,1),outgrid)
+    original,_,_=prepare_tile(tile,context,model=False)
+    original=cv2.resize(original,shape[::-1],interpolation=cv2.INTER_LINEAR)
+    original[~observed]=0;paths['original_image']=directory/'original_rgb.tif'
+    write_raster(paths['original_image'],original.transpose(2,0,1),outgrid)
     probabilities[:,~observed]=0;np.save(paths['probabilities'],probabilities)
     for key,data in [('shape_probabilities',shape_probability),('max_probabilities',max_probability)]:
         data[:,~observed]=0;paths[key]=directory/(key+'.npy');np.save(paths[key],data)

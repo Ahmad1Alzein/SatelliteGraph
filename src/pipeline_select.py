@@ -34,7 +34,7 @@ def resolve_options(saved: dict, supplied: dict, *, initial: bool, project_root:
     defaults = {"data": project_root / "data/experiment_2013_2023",
                 "checkpoints": project_root / "checkpoints/experiment_2013_2023",
                 "config": project_root / "config.yaml", "skip_input_check": False,
-                "register_images": False, "no_progress": False}
+                "register_images": False, "harmonize_images": False, "no_progress": False}
     defaults.update(device='cpu',inference_window=512,inference_overlap=128,tta=True,
                     semantic_models=project_root/'checkpoints/semantic_temporal')
     for key, value in defaults.items():

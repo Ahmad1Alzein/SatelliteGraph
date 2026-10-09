@@ -37,6 +37,8 @@ def relocate_run(output,state):
 def execute_stage(output,stage,method,options,state):
     from .visualization import validate_run,render_outputs
     context=prepare_comparison(build_context(options,output))
+    from .preprocessing import prepare_model_inputs
+    context=prepare_model_inputs(context)
     if stage=='segmentation':
         if method=='new':
             from .segmentation import segment_tile,load_models

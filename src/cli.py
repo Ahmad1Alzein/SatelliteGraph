@@ -295,6 +295,8 @@ def _add_pipeline_parser(commands) -> None:
         old.add_argument("--max-comparison-pixels",type=int,default=None)
         old.add_argument("--gnn-epochs",type=int,default=None)
         old.add_argument("--gnn-hidden",type=int,default=None)
+        old.add_argument("--harmonize-images",action=argparse.BooleanOptionalAction,default=None,
+                         help="Match paired image brightness and sharpness before segmentation")
         reg = old.add_mutually_exclusive_group()
         reg.add_argument("--registration-json", default=None, help="Cross-year control points (old classical)")
         reg.add_argument("--register-images", action=argparse.BooleanOptionalAction, default=None,
@@ -493,7 +495,7 @@ def main(argv: list[str] | None = None) -> None:
                 "boundary_tolerance": args.boundary_tolerance, "config": resolve(args.config),
                 "no_progress": args.no_progress,
             }
-            for key in ('pixel_size','device','semantic_models','gnn_checkpoint','target_crs','target_resolution','inference_window','inference_overlap','tta','max_pixels','max_comparison_pixels','gnn_epochs','gnn_hidden'):
+            for key in ('pixel_size','device','semantic_models','gnn_checkpoint','target_crs','target_resolution','inference_window','inference_overlap','tta','max_pixels','max_comparison_pixels','gnn_epochs','gnn_hidden','harmonize_images'):
                 options[key]=getattr(args,key)
             output = resolve(args.output)
             if args.phase == "run":

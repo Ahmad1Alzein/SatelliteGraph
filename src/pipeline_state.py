@@ -19,6 +19,9 @@ def input_fingerprint(options: dict) -> str:
             'checkpoints', 'semantic_models','config','old_config','pixel_size','processing_scale','target_resolution',
             'target_crs','registration_json','register_images','inference_window','inference_overlap','tta')
     settings = {k: options[k] for k in keys if options.get(k) is not None}
+    if options.get('harmonize_images'):
+        settings['harmonize_images'] = True
+        settings['preprocessing_profile'] = 'paired-harmonization.v1'
     files = []
     # Selected PNGs still consume their discovered placement and original raster.
     for index, image in enumerate(options.get('images') or []):
@@ -47,7 +50,7 @@ def input_fingerprint(options: dict) -> str:
                     p=Path(model[key]);p=p if p.is_absolute() else root/p
                     if p.is_file(): files.append(p)
     for key, value in settings.items():
-        if key == 'years' or isinstance(value, dict) or key in ('pixel_size','processing_scale','target_resolution','target_crs','register_images','inference_window','inference_overlap','tta'):
+        if key == 'years' or isinstance(value, dict) or key in ('pixel_size','processing_scale','target_resolution','target_crs','register_images','inference_window','inference_overlap','tta','harmonize_images','preprocessing_profile'):
             continue
         for item in value if isinstance(value, list) else [value]:
             if item is None: continue
