@@ -75,7 +75,7 @@ def load_change_policy(path: Path | None) -> dict:
 def change_label(event: dict) -> str:
     kind = event.get('kind', 'uncertain')
     if kind in ('conversion', 'class_conversion'):
-        return f"{CLASS_LABELS[int(event['source_class'])]} â†’ {CLASS_LABELS[int(event['target_class'])]}"
+        return f"{CLASS_LABELS[int(event['source_class'])]} \u2192 {CLASS_LABELS[int(event['target_class'])]}"
     structural = {'split': 'One area split', 'merge': 'Areas joined',
                   'many_to_many': 'Complex match', 'connectivity': 'Connections changed',
                   'neighborhood': 'Nearby areas changed'}
