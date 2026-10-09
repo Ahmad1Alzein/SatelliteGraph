@@ -26,7 +26,7 @@ def test_actual_years_construction_and_pseudo_target_provenance(tmp_path):
     assert any(n['event']=='persistent' for n in result['node_changes'])
     import pandas as pd
     targets=pd.read_csv(artifact.directory/'training_targets.csv')
-    assert set(targets.label)=={0,1}
+    assert set(targets.loc[targets.task=='building_gain','label'].dropna())=={0,1}
     assert targets.source.str.contains('rule').all()
 
 
@@ -45,10 +45,12 @@ def test_missing_coverage_and_unknown_are_never_negative_changes(tmp_path):
 def test_old_graph_uses_existing_classical_event_engine(tmp_path):
     from pipelines.semantic_temporal.runtime.temporal import detect_classical
     artifact,context=temporal_fixture(tmp_path,'old');result=detect_classical(artifact,context)
-    assert result['engine']=='stage5_classical'
-    assert any(event['relation']=='constructed' for event in result['events'])
+    assert result['engine']=='all_class_image_evidence'
+    assert result['legacy_engine']=='stage5_classical'
+    legacy=read_json(result['legacy_report'])
+    assert any(event['relation']=='constructed' for event in legacy['events'])
     nodes={n['id']:n for n in read_json(artifact.paths['graph'])['nodes']}
-    for row in result['node_changes']:
+    for row in legacy['node_changes']:
         if row['label'] is not None: assert nodes[row['gid']]['class_id']==1
         if row['label']==1: assert row['year']==2023
 
@@ -74,7 +76,7 @@ def test_tree_gain_raster_and_json_events_agree(tmp_path):
                for y,klass in ((2017,6),(2023,3))]
     graphs=tuple(combine_year_graphs([build_tile_graph(a,'new',context)],context) for a in artifacts)
     report=detect_classical(build_temporal_graph(graphs,context),context)
-    assert any(e['relation']=='tree_gain' for e in report['events'])
+    assert any(e['target_class']==3 and 'tree_gain' in e['related_tasks'] for e in report['events'])
     assert next(r for r in report['node_changes'] if r['year']==2023)['event']=='tree_gain'
     assert all(r['event']!='persistent' for r in report['node_changes'])
 

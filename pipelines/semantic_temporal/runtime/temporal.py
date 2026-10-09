@@ -139,6 +139,7 @@ def build_temporal_graph(graphs,context):
     atomic_json(paths['components'],components)
     atomic_json(paths['graph'],{'schema':SCHEMA,'relation_profile':RELATION_PROFILE,'years':[g.year for g in graphs],'method':graphs[0].method,'units':graphs[0].grid.units,
                 'annual_artifacts':[str(g.directory/'artifact.json') for g in graphs],'nodes':nodes,'temporal_edges':edges,
+                'spatial_edges':[edge for doc in docs for edge in doc['edges']],
                 'primary_components':components,
                 'common_coverage_area':common.area,'registration':context.options.get('registration',{'method':'georeference_only','accuracy_status':'not_independently_verified'})})
     x=[];ei=[];ea=[];et=[];node_ids=[];offset=0
@@ -211,7 +212,7 @@ def _image_evidence(document,grid,shape_hw,context):
     return arrays
 
 
-def detect_classical(graph,context):
+def _detect_legacy_classical(graph,context):
     document=read_json(graph.paths['graph']);nodes=document['nodes'];years=document['years'];method=document['method']
     earlier=[n for n in nodes if n['year']==years[0]];later=[n for n in nodes if n['year']==years[1]]
     if not earlier or not later: raise ValueError('Both years need observed nodes')
@@ -303,5 +304,44 @@ def detect_classical(graph,context):
     pd.DataFrame([{'gid':r['gid'],'label':r['label'],'confidence':r['confidence'],'source':r['source'],'year':r['year']} for r in changes if r['label'] is not None],columns=['gid','label','confidence','source','year']).to_csv(graph.paths['targets'],index=False)
     paths={**graph.paths,'classical':graph.directory/'classical_changes.json'}
     if (graph.directory/'change_map.tif').exists(): paths['change_map']=graph.directory/'change_map.tif'
+    save_manifest(graph.directory,paths)
+    return result
+
+
+def detect_classical(graph,context):
+    """Preserve the prior method result and publish exhaustive image evidence."""
+    from .comparison import load_comparison
+    from .all_class_evidence import detect_evidence
+    from .change_catalog import build_change_catalog
+    from .change_contracts import load_change_policy
+    document=read_json(graph.paths['graph'])
+    if all(any(n['year']==year for n in document['nodes']) for year in document['years']):
+        legacy=_detect_legacy_classical(graph,context)
+    else:
+        legacy={'status':'no_observations','years':document['years'],
+                'engine':'stage5_classical' if document['method']=='old' else 'semantic_image_evidence',
+                'events':[],'node_changes':[]}
+    legacy_path=graph.directory/'legacy_classical_changes.json';atomic_json(legacy_path,legacy)
+    legacy_targets=graph.directory/'legacy_training_targets.csv'
+    if graph.paths['targets'].is_file():
+        legacy_targets.write_bytes(graph.paths['targets'].read_bytes())
+    else:
+        pd.DataFrame(columns=['gid','label','confidence','source','year']).to_csv(legacy_targets,index=False)
+    policy=load_change_policy(context.options.get('change_policy'))
+    frame=load_comparison(graph,context);evidence=detect_evidence(frame,policy)
+    result=build_change_catalog(graph,frame,evidence,policy,reviewed_targets=context.options.get('reviewed_targets'))
+    result.update(legacy_engine=legacy['engine'],legacy_report=str(legacy_path))
+    atomic_json(graph.directory/'classical_changes.json',result)
+    pd.DataFrame(result['targets'],columns=['gid','task','label','confidence','source','year','eligible','reason']).to_csv(graph.paths['targets'],index=False)
+    write_raster(graph.directory/'class_transition_map.tif',evidence['transition'],frame['grid'],nodata=65535)
+    atomic_json(graph.directory/'transition_matrix.json',result['transition_matrix'])
+    atomic_json(graph.directory/'change_policy.json',policy)
+    atomic_json(graph.directory/'transition_encoding.json',evidence['transition_encoding'])
+    atomic_json(graph.directory/'change_graph.json',{**document,'change_edges':result['derived_edges'],
+               'change_events':result['events'],'structural_observations':result['structural_observations']})
+    paths={**graph.paths,'classical':graph.directory/'classical_changes.json',
+           'legacy_classical':legacy_path,'legacy_targets':legacy_targets,
+           **{name:graph.directory/name for name in ('class_transition_map.tif','transition_matrix.json','change_policy.json','transition_encoding.json','change_graph.json')}}
+    if (graph.directory/'change_map.tif').is_file():paths['legacy_change_map']=graph.directory/'change_map.tif'
     save_manifest(graph.directory,paths)
     return result
