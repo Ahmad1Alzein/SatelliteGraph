@@ -188,7 +188,11 @@ def combine_year_graphs(graphs,context):
         for klass in range(9): confidence[classes==klass]=prob[klass,classes==klass]
         result=SimpleNamespace(graph=old['graph'],edges=old['edges'])
         tiles.append(_TileInput(key,result,graph.directory,labels,confidence,{n['instance_id']:n for n in old['nodes']},x,y,labels.shape[1],labels.shape[0],np.ones(labels.shape,bool)))
-        inputs[key]=(artifact,classes,prob)
+        rgb=None
+        if 'image' in artifact.paths:
+            with rasterio.open(artifact.paths['image']) as src:rgb=src.read().transpose(1,2,0)
+        full=not ('validation' in artifact.paths and read_json(artifact.paths['validation']).get('probability_evidence')=='assigned_label_confidence_only')
+        inputs[key]=(artifact,classes,prob,rgb,full)
     from .context import old_configuration
     cfg=select_stage4_config(old_configuration(context));matches=_overlap_candidates(tiles,cfg['overlap']);union,accepted=_resolve_matches(tiles,matches);_assign_ownership(tiles)
     old_nodes,geoms,roots,dropped=_build_combined_nodes(tiles,union,str(graphs[0].year))
@@ -199,12 +203,11 @@ def combine_year_graphs(graphs,context):
     for record,geom in zip(old_nodes,geoms):
         rgbs=[];probs=[];members=[];full=True
         for member in record['members']:
-            tile=next(t for t in tiles if t.tile_id==member['tile_id']);artifact,classes,prob=inputs[tile.tile_id]
+            tile=next(t for t in tiles if t.tile_id==member['tile_id']);artifact,classes,prob,image,evidence=inputs[tile.tile_id]
             mask=tile.ownership&(tile.instance_map==member['instance_id'])
-            if 'image' in artifact.paths:
-                with rasterio.open(artifact.paths['image']) as src: rgbs.append(src.read().transpose(1,2,0)[mask])
+            if image is not None:rgbs.append(image[mask])
             probs.append(prob[:,mask]);members.extend(artifact.lineage.get(str(member['instance_id']),[]))
-            if 'validation' in artifact.paths: full &= read_json(artifact.paths['validation']).get('probability_evidence')!='assigned_label_confidence_only'
+            full &= evidence
         klass={v:k for k,v in CANONICAL_TO_OLD.items()}[record['segment_type']['id']]
         rgb=np.concatenate(rgbs) if rgbs else np.zeros((0,3),np.uint8)
         probability=np.concatenate(probs,axis=1).mean(1)

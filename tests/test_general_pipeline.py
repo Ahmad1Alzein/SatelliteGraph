@@ -33,6 +33,9 @@ def test_all_eight_combinations_produce_real_artifacts(tmp_path,input_pair,segme
     assert state['stages']['change']['status'] in ('complete','insufficient_data','training_only')
     assert (output/'temporal/graph_tensors.npz').is_file()
     assert (output/'validation.json').is_file()
+    assert list((output/'results/segmentation').rglob('*.png'))
+    assert list((output/'results/graphs').rglob('*.png'))
+    assert (output/'results/change_report.png').is_file()
 
 
 def test_separate_stages_inherit_single_images_and_relocated_output(tmp_path,input_pair):

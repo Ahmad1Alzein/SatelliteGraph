@@ -3,6 +3,9 @@ from pathlib import Path
 import hashlib
 import json
 
+GRAPH_PROFILE = 'directional-all-class.v1'
+RENDER_PROFILE = 'all-class-results.v1'
+
 
 def stage_fingerprint(inputs: list[Path], settings: dict) -> str:
     digest = hashlib.sha256(json.dumps(settings, sort_keys=True, default=str).encode())
@@ -17,8 +20,9 @@ def stage_fingerprint(inputs: list[Path], settings: dict) -> str:
 def input_fingerprint(options: dict) -> str:
     keys = ('folders', 'images', 'years', 'data', 'metadata', 'source_rasters',
             'checkpoints', 'semantic_models','config','old_config','pixel_size','processing_scale','target_resolution',
-            'target_crs','registration_json','register_images','inference_window','inference_overlap','tta')
+            'target_crs','registration_json','register_images','registration_max_residual','inference_window','inference_overlap','tta')
     settings = {k: options[k] for k in keys if options.get(k) is not None}
+    if options.get('register_images'):settings['registration_profile']='guided-current-images.v1'
     if options.get('harmonize_images'):
         settings['harmonize_images'] = True
         settings['preprocessing_profile'] = 'paired-harmonization.v1'
@@ -50,7 +54,7 @@ def input_fingerprint(options: dict) -> str:
                     p=Path(model[key]);p=p if p.is_absolute() else root/p
                     if p.is_file(): files.append(p)
     for key, value in settings.items():
-        if key == 'years' or isinstance(value, dict) or key in ('pixel_size','processing_scale','target_resolution','target_crs','register_images','inference_window','inference_overlap','tta','harmonize_images','preprocessing_profile'):
+        if key == 'years' or isinstance(value, dict) or key in ('pixel_size','processing_scale','target_resolution','target_crs','register_images','registration_max_residual','registration_profile','inference_window','inference_overlap','tta','harmonize_images','preprocessing_profile'):
             continue
         for item in value if isinstance(value, list) else [value]:
             if item is None: continue
@@ -72,14 +76,29 @@ def validate_resume(state: dict, stage: str, fingerprint: str) -> None:
 
 
 def change_fingerprint(options: dict) -> str:
-    settings={k:options.get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance')}
+    settings={k:options.get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance','change_policy','reviewed_targets')}
+    settings['algorithm']='all-class-image-evidence-and-rgnn.v1'
     files=[]
+    for key in ('change_policy','reviewed_targets'):
+        if options.get(key):
+            path=Path(options[key]);settings[key+'_exists']=path.is_file()
+            if path.is_file():files.append(path)
     if options.get('gnn_checkpoint'):
         checkpoint=Path(options['gnn_checkpoint'])
         for path in (checkpoint,checkpoint.with_suffix('.json')):
             settings[str(path)]=path.is_file()
             if path.is_file(): files.append(path)
     return stage_fingerprint(files,settings)
+
+
+def graph_fingerprint(options: dict) -> str:
+    return stage_fingerprint([],{'profile':GRAPH_PROFILE})
+
+
+def render_fingerprint(options: dict,stage: str) -> str:
+    settings={'profile':RENDER_PROFILE,'stage':stage,'labels':'plain-language.v1'}
+    if stage=='change':settings['max_report_pixels']=options.get('max_report_pixels',128_000_000)
+    return stage_fingerprint([],settings)
 
 
 def record_stage(output: Path, stage: str, status: str, **details) -> dict:

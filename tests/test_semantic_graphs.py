@@ -45,6 +45,22 @@ def test_overlap_is_owned_once_with_members_and_schema_validation(tmp_path):
     validate_combined_graph(read_json(combined.paths['old_contract']))
 
 
+def test_annual_rgb_io_does_not_grow_with_node_count(tmp_path,monkeypatch):
+    import rasterio
+    from pipelines.semantic_temporal.runtime.graphs import build_tile_graph,combine_year_graphs
+    labels=np.ones((8,12),np.int32);labels[:,6:]=2
+    artifact=make_artifact(tmp_path/'inputs',labels)
+    context=RunContext(tmp_path/'run',(),{}, {},'fixture')
+    graph=build_tile_graph(artifact,'new',context);original=rasterio.open;reads=[]
+    def opened(path,*args,**kwargs):
+        if Path(path)==artifact.paths['image']:reads.append(path)
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(rasterio,'open',opened)
+    annual=combine_year_graphs([graph],context)
+    assert len(reads)<=1
+    assert all(node['rgb_mean']==[100.,100.,100.] for node in read_json(annual.paths['graph'])['nodes'])
+
+
 def test_annual_overlap_uses_saved_custom_config(tmp_path,monkeypatch):
     from pipelines.semantic_temporal.runtime.graphs import build_tile_graph,combine_year_graphs
     from src.config import load_config

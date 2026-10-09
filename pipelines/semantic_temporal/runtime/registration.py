@@ -46,6 +46,21 @@ def coverage_pairs(context):
             if footprints[a.key].intersection(footprints[b.key]).area>0]
 
 
+def registration_pairs(context,limit=8):
+    """Prefer substantial shared coverage, distributing the budget across source tiles."""
+    footprints={tile.key:Polygon(_world_points(tile,[(0,0),(tile.shape_hw[1],0),
+        (tile.shape_hw[1],tile.shape_hw[0]),(0,tile.shape_hw[0])],context))
+        for year in context.years for tile in year.tiles}
+    ranked=sorted(coverage_pairs(context),key=lambda pair:(
+        -footprints[pair[0]].intersection(footprints[pair[1]]).area,
+        pair[0],pair[1]))
+    first=[];remaining=[];seen=set()
+    for pair in ranked:
+        if pair[0] not in seen:first.append(pair);seen.add(pair[0])
+        else:remaining.append(pair)
+    return (first+remaining)[:limit]
+
+
 def _features(tile, context):
     rgb,mask=read_tile(tile); h,w=mask.shape
     factor=min(1.0,2048/max(h,w)); H=max(1,round(h*factor)); W=max(1,round(w*factor))
@@ -57,7 +72,17 @@ def _features(tile, context):
     return _world_points(tile,points,context,registered=False),desc
 
 
-def _matched_controls(moving,reference,context):
+def _matched_controls(moving,reference,context,details=None):
+    if moving.grid.crs and reference.grid.crs:
+        from src.stage5.registration import staged_tile_control_points
+        try:
+            mp,rp,diagnostics=staged_tile_control_points(moving.image,moving.grid.affine,moving.grid.crs,
+                reference.image,reference.grid.affine,reference.grid.crs,context.options.get('target_crs') or reference.grid.crs)
+            if details is not None:details.append({'moving_tile':moving.key,'reference_tile':reference.key,**diagnostics})
+            return mp,rp
+        except ValueError:
+            # Approximate maps with little common coverage can still have distributed descriptor matches.
+            pass
     mp,md=_features(moving,context); rp,rd=_features(reference,context)
     matcher=cv2.BFMatcher(cv2.NORM_L2)
     def ratio(a,b):
@@ -66,6 +91,7 @@ def _matched_controls(moving,reference,context):
     forward=ratio(md,rd); backward=ratio(rd,md)
     pairs=[(a,b) for a,b in forward.items() if backward.get(b)==a]
     if len(pairs)<6: raise ValueError('Insufficient mutual registration landmarks; supply control points')
+    if details is not None:details.append({'moving_tile':moving.key,'reference_tile':reference.key,'method':'mutual_sift'})
     return mp[[a for a,b in pairs]],rp[[b for a,b in pairs]]
 
 
@@ -107,21 +133,23 @@ def prepare_comparison(context):
     prepared=replace(context,options=options)
     if len(context.years)==2:
         registration=None
-        moving=[]; reference=[]; control_keys=[]
+        moving=[]; reference=[]; control_keys=[];feature_diagnostics=[]
         if options.get('registration_json'):
             controls=read_json(options['registration_json'])
             moving=controls['moving_xy']; reference=controls['reference_xy']
             registration=fit_registration(controls['moving_xy'],controls['reference_xy'],
                                           max_residual_m=float(controls.get('max_residual_m',2.0)))
         elif options.get('register_images'):
-            pairs=coverage_pairs(prepared)
+            pairs=registration_pairs(prepared)
             if not pairs: raise ValueError('Yearly image coverage does not overlap; registration cannot be estimated')
             by_key={t.key:t for t in tiles}; moving=[];reference=[]
-            indices=np.unique(np.linspace(0,len(pairs)-1,min(8,len(pairs))).astype(int))
-            for index in indices:
-                a,b=pairs[index]
-                try: m,r=_matched_controls(by_key[a],by_key[b],prepared)
+            for a,b in pairs:
+                try: m,r=_matched_controls(by_key[a],by_key[b],prepared,feature_diagnostics)
                 except ValueError: continue
+                try:fit_registration(m,r,max_residual_m=options.get('registration_max_residual',2.0))
+                except ValueError:
+                    feature_diagnostics[-1]['fit_status']='rejected_insufficient_local_support'
+                    continue
                 moving.extend(m);reference.extend(r)
                 control_keys.extend([(a,b)]*len(m))
             if len(moving)<6: raise ValueError('Registration lacks distributed landmarks; supply --registration-json')
@@ -129,7 +157,9 @@ def prepare_comparison(context):
             _,unique=np.unique(np.round(m,6),axis=0,return_index=True)
             moving=m[unique];reference=r[unique]
             control_keys=[control_keys[i] for i in unique]
-            registration=fit_registration(moving,reference)
+            tolerance=options.get('registration_max_residual',2.0)
+            registration=fit_registration(moving,reference,max_residual_m=tolerance)
+            registration['max_residual']=float(tolerance)
         if registration:
             if options['coordinate_units']=='pixels':
                 registration={k.replace('_m2','_pixel2').replace('_m','_pixels'):v for k,v in registration.items()}
@@ -160,7 +190,8 @@ def prepare_comparison(context):
                               'moving_xy':np.asarray(m).tolist(),'reference_xy':np.asarray(r).tolist(),
                               'inlier':bool(inlier),'residual':float(residual)})
             atomic_json(context.output/'prepared/registration_controls.json',{
-                'method':'supplied_controls' if options.get('registration_json') else 'mutual_sift_affine_ransac',
+                'method':'supplied_controls' if options.get('registration_json') else 'current_image_features_affine_ransac',
+                'feature_diagnostics':feature_diagnostics,
                 'units':options['coordinate_units'],'years':[y.year for y in context.years],
                 'pairs':pairs,'diagnostics':registration,
                 'accuracy_status':'in_sample_only_requires_independent_validation'})

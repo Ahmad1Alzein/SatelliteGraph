@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from src.config import DEFAULT_CONFIG
-from src.pipeline_state import input_fingerprint, validate_resume,change_fingerprint
+from src.pipeline_state import input_fingerprint, validate_resume,change_fingerprint,graph_fingerprint,render_fingerprint
 
 REPO = Path(__file__).resolve().parents[1]
 PACKAGE = REPO / "pipelines" / "semantic_temporal"
@@ -36,10 +36,10 @@ def resolve_options(saved: dict, supplied: dict, *, initial: bool, project_root:
                 "config": project_root / "config.yaml", "skip_input_check": False,
                 "register_images": False, "harmonize_images": False, "no_progress": False}
     defaults.update(device='cpu',inference_window=512,inference_overlap=128,tta=True,
-                    semantic_models=project_root/'checkpoints/semantic_temporal')
+                    semantic_models=project_root/'checkpoints/semantic_temporal',max_report_pixels=128_000_000)
     for key, value in defaults.items():
         merged.setdefault(key, value)
-    for key in ("data", "checkpoints", "config", "registration_json", "project_root", "semantic_models", "gnn_checkpoint"):
+    for key in ("data", "checkpoints", "config", "registration_json", "project_root", "semantic_models", "gnn_checkpoint", "change_policy", "reviewed_targets"):
         if key in merged and not isinstance(merged[key], dict):
             p = Path(merged[key]).expanduser()
             merged[key] = str((p if p.is_absolute() else project_root / p).resolve())
@@ -63,10 +63,8 @@ def _ledger(output: Path) -> dict:
 
 
 def _save(output: Path, state: dict) -> None:
-    output.mkdir(parents=True, exist_ok=True)
-    tmp = output / "run.json.tmp"
-    tmp.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-    tmp.replace(output / "run.json")
+    from pipelines.semantic_temporal.runtime.storage import atomic_json
+    atomic_json(output/'run.json',state)
 
 
 def _git_commit() -> str | None:
@@ -85,10 +83,12 @@ def _start(output: Path, stage: str, method: str, options: dict) -> dict:
     previous = state.get("stages", {})
     if stage != "segmentation":
         seg = previous.get("segmentation", {})
-        if seg.get("status") != "complete":
+        if seg.get('scientific_status')!='complete' and seg.get("status") != "complete":
             raise ValueError(f"{output} has no completed segmentation stage; run 'pipeline segment' first")
-    if stage == "change" and previous.get("graph", {}).get("status") != "complete":
+    if stage == "change" and previous.get('graph',{}).get('scientific_status')!='complete' and previous.get("graph", {}).get("status") != "complete":
         raise ValueError(f"{output} has no completed graph stage; run 'pipeline graph' first")
+    if stage=='change' and previous['graph'].get('settings_fingerprint')!=graph_fingerprint(effective):
+        raise ValueError('Graph profile changed; run pipeline graph before change, or use pipeline run --resume')
     check_combination(previous.get("segmentation", {}).get("method", method if stage == "segmentation" else None),
                       method if stage == "graph" else previous.get("graph", {}).get("method"),
                       method if stage == "change" else None)
@@ -101,19 +101,34 @@ def _start(output: Path, stage: str, method: str, options: dict) -> dict:
         state.setdefault("stages", {}).pop(dependent, None)
     state.setdefault("stages", {})[stage] = {"method": method, "status": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     if stage=='change': state['stages'][stage]['settings_fingerprint']=change_fingerprint(effective)
+    if stage=='graph': state['stages'][stage]['settings_fingerprint']=graph_fingerprint(effective)
     _save(output, state)
+    if (output/'results').is_dir():
+        from pipelines.semantic_temporal.runtime.runner import _result_index
+        _result_index(output,state)
     return state
 
 
 def _finish(output: Path, state: dict, stage: str, **info) -> dict:
-    state["stages"][stage].update(status="complete", finished=time.strftime("%Y-%m-%d %H:%M:%S"), **info)
+    saved=state['stages'][stage]
+    saved.update(status="complete",scientific_status='complete',render_status='complete',
+                 render_fingerprint=render_fingerprint(state['options'],stage),finished=time.strftime("%Y-%m-%d %H:%M:%S"), **info)
+    if stage=='change' and saved.get('result',{}).get('status') in ('insufficient_data','training_only'):
+        saved['status']=saved['result']['status']
     _save(output, state)
+    if (output/'results').is_dir():
+        from pipelines.semantic_temporal.runtime.runner import _result_index
+        _result_index(output,state)
     return {"stage": stage, **state["stages"][stage], "run": str(output / "run.json")}
 
 
 def _fail(output: Path, state: dict, stage: str, exc: Exception) -> None:
-    state["stages"][stage].update(status="failed", error=f"{type(exc).__name__}: {exc}")
+    saved=state['stages'][stage]
+    saved.update(status='render_failed' if saved.get('scientific_status')=='complete' else 'failed', error=f"{type(exc).__name__}: {exc}")
     _save(output, state)
+    if (output/'results').is_dir():
+        from pipelines.semantic_temporal.runtime.runner import _result_index
+        _result_index(output,state)
 
 
 # ----------------------------------------------------------------------------- new pipeline (experiment package)
@@ -225,20 +240,31 @@ def run(segmentation: str, graph_method: str, change_method: str, output, *, unt
         state=relocate_run(output,state)
         effective=resolve_options(state.get('options',{}),options,initial=not bool(state),project_root=Path(options.get('project_root') or REPO))
         validate_resume(state,'segmentation',input_fingerprint(effective))
-        downstream_changed=change_fingerprint(effective)!=state.get('stages',{}).get('change',{}).get('settings_fingerprint')
         state['options']=effective;_save(output,state)
-    else: downstream_changed=False
     results={}
     for stage,method,execute in (('segmentation',segmentation,segment),('graph',graph_method,graph),('change',change_method,change)):
         state=_ledger(output)
         saved=state.get('stages',{}).get(stage,{})
-        if resume and saved.get('status')=='complete' and saved.get('method')==method and not (stage=='change' and downstream_changed):
+        science_complete=saved.get('scientific_status')=='complete' or saved.get('status')=='complete'
+        settings_changed=(stage=='change' and change_fingerprint(state.get('options',{}))!=saved.get('settings_fingerprint')) or (stage=='graph' and graph_fingerprint(state.get('options',{}))!=saved.get('settings_fingerprint'))
+        if resume and science_complete and saved.get('method')==method and not settings_changed:
             from pipelines.semantic_temporal.runtime.storage import verify_manifest
             artifacts=saved.get('result',{}).get('artifacts')
             if not artifacts:
                 raise ValueError('This saved run predates the general artifact format; use a fresh --output folder')
             for artifact in artifacts: verify_manifest(Path(artifact).parent)
-            results[stage]=saved
+            from pipelines.semantic_temporal.runtime.runner import render_completed_stage
+            from pipelines.semantic_temporal.runtime.storage import verify_result_manifest
+            render_changed=saved.get('render_fingerprint')!=render_fingerprint(state.get('options',{}),stage)
+            if saved.get('render_status')!='complete' or render_changed:
+                render_completed_stage(output,stage,state)
+                results[stage]=_finish(output,state,stage,result=saved['result'])
+            else:
+                # Compatibility with injected lightweight executors in API tests. Real runs always have a render manifest.
+                if (output/'results/rendering'/stage/'manifest.json').is_file():verify_result_manifest(output,stage)
+                elif (output/'context.json').is_file():
+                    render_completed_stage(output,stage,state)
+                results[stage]=saved
         else: results[stage]=execute(method,output,**options if stage=='segmentation' else {})
         if stage==until: break
     return results

@@ -14,6 +14,18 @@ COLORS=np.array([[130,130,130],[230,57,70],[90,90,100],[27,120,55],[150,200,90],
                  [196,150,100],[170,140,200],[40,120,230]],np.uint8)
 
 
+def validate_temporal_schema(document,tensors,specification):
+    from .change_contracts import TASKS,RELATIONS,RELATION_PROFILE
+    if specification.get('relation_profile')!=RELATION_PROFILE:raise ValueError('Unsupported temporal relation profile')
+    if specification.get('tasks')!=list(TASKS):raise ValueError('Invalid temporal task order')
+    if specification.get('relations')!=list(RELATIONS):raise ValueError('Invalid temporal relation order')
+    n=len(document['nodes']);edges=tensors['edge_index'];attributes=tensors['edge_attr'];types=tensors['edge_type']
+    if tensors['x'].shape[0]!=n or tensors['node_ids'].tolist()!=[node['id'] for node in document['nodes']]:raise ValueError('Temporal tensor node order mismatch')
+    if edges.ndim!=2 or edges.shape[0]!=2 or attributes.shape!=(edges.shape[1],10) or types.shape!=(edges.shape[1],):raise ValueError('Invalid temporal edge tensor dimensions')
+    if edges.size and (edges.min()<0 or edges.max()>=n):raise ValueError('Invalid temporal tensor endpoint')
+    if types.size and (types.min()<0 or types.max()>=len(RELATIONS)):raise ValueError('Invalid temporal relation index')
+
+
 def validate_run(context,stage):
     artifacts=[]
     for path in sorted(context.output.rglob('artifact.json')):
@@ -32,12 +44,22 @@ def validate_run(context,stage):
             if any(str(int(i)) not in document['lineage'] for i in np.unique(labels[valid])): raise ValueError('Missing segment lineage')
         elif 'graph' in paths:
             graph=read_json(paths['graph']);nodes=graph['nodes'];ids={n['id'] for n in nodes}
+            if 'years' in graph and stage!='change':continue
             if len(ids)!=len(nodes): raise ValueError('Duplicate graph node IDs')
             for edge in graph.get('edges',graph.get('temporal_edges',[])):
                 if edge['source'] not in ids or edge['target'] not in ids: raise ValueError('Missing graph edge endpoint')
             if any(not shape(n['geometry']).is_valid or n['area']<=0 for n in nodes): raise ValueError('Invalid graph geometry')
             with np.load(paths['tensors'],allow_pickle=False) as tensors:
                 if not np.isfinite(tensors['x']).all() or not np.isfinite(tensors['edge_attr']).all(): raise ValueError('Nonfinite graph features')
+                if 'years' in graph:validate_temporal_schema(graph,tensors,read_json(paths['features']))
+            if 'years' in graph and (directory/'classical_changes.json').is_file():
+                from .change_contracts import CHANGE_SCHEMA,KNOWN_CLASSES,TASKS
+                catalog=read_json(directory/'classical_changes.json')
+                if catalog.get('schema')!=CHANGE_SCHEMA:raise ValueError('Change report predates the all-class schema; recompute change')
+                events=catalog['events']
+                if len({e['event_id'] for e in events})!=len(events):raise ValueError('Duplicate change events')
+                if any(e['source_class'] not in KNOWN_CLASSES or e['target_class'] not in KNOWN_CLASSES or not shape(e['geometry']).is_valid for e in events):raise ValueError('Invalid change event')
+                if any(row['task'] not in TASKS for row in catalog['targets']):raise ValueError('Invalid class-change target')
         artifacts.append(str(path.relative_to(context.output)))
     if not artifacts: raise ValueError('No completed scientific artifacts to validate')
     result={'status':'pass','stage':stage,'artifacts':artifacts,'audit_status':'not_provided'}
@@ -96,4 +118,16 @@ def render_outputs(context,stage):
     if stage in ('segmentation','graph'):
         from .reports.stages import render_stage_results
         paths.update(render_stage_results(context,stage))
+    elif stage=='change':
+        from .contracts import TemporalArtifact
+        from .comparison import load_comparison
+        from .reports.matching import render_matching_results
+        from .reports.changes import render_change_results
+        value=read_json(context.output/'temporal/artifact.json')
+        graph=TemporalArtifact(tuple(value['years']),Path(value['directory']),{k:Path(v) for k,v in value['paths'].items()})
+        frame=load_comparison(graph,context);catalog=read_json(graph.directory/'classical_changes.json')
+        report=graph.directory/'gnn/report.json';method=read_json(context.output/'run.json')['stages']['change']['method']
+        gnn=read_json(report) if method=='gnn' and report.is_file() else None
+        paths.update(render_matching_results(graph,context,frame,catalog))
+        paths.update(render_change_results(graph,context,frame,catalog,gnn))
     return paths

@@ -97,3 +97,32 @@ def test_current_image_registration_recovers_measured_shift(tmp_path):
     points=np.array([[500000,3700000],[500384,3700000],[500000,3699712],[500384,3699712]],float)
     displacement=points@affine[:,:2].T+affine[:,2]-points
     np.testing.assert_allclose(displacement,np.tile([4.5,3],(4,1)),atol=.12)
+
+
+def test_mapped_registration_uses_existing_guided_phase(tmp_path,monkeypatch):
+    import pipelines.semantic_temporal.runtime.registration as registration
+    from pipelines.semantic_temporal.runtime.context import build_context
+    from src.stage5 import registration as original
+    first=make_year(tmp_path);second=make_year(tmp_path,2023)
+    context=build_context({'folders':[str(first),str(second)],'register_images':True,
+                           'registration_max_residual':3.0},tmp_path/'run')
+    points=np.array([[0,0],[20,0],[0,20],[20,20],[40,0],[0,40]],float)+[500000,3700000]
+    calls=[]
+    def guided(*args):calls.append(args);return points,points+[1,2],{'method':'phase_guided_sift_ransac'}
+    monkeypatch.setattr(original,'staged_tile_control_points',guided)
+    result=registration.prepare_comparison(context)
+    assert calls
+    assert result.options['registration']['max_residual']==3.0
+    from pipelines.semantic_temporal.runtime.storage import read_json
+    saved=read_json(context.output/'prepared/registration_controls.json')
+    assert saved['feature_diagnostics'][0]['method']=='phase_guided_sift_ransac'
+
+
+def test_registration_prioritizes_strong_coverage_pairs(tmp_path):
+    from pipelines.semantic_temporal.runtime.registration import registration_pairs
+    from pipelines.semantic_temporal.runtime.context import build_context
+    first=make_year(tmp_path,names=('a.png','b.png','c.png'),offsets=((0,0),(16,0),(32,0)))
+    second=make_year(tmp_path,2023,names=('x.png','y.png','z.png'),offsets=((0,0),(16,0),(32,0)))
+    context=build_context({'folders':[str(first),str(second)]},tmp_path/'run')
+    pairs=registration_pairs(context,limit=3)
+    assert set(pairs)=={('2017/a.png','2023/x.png'),('2017/b.png','2023/y.png'),('2017/c.png','2023/z.png')}

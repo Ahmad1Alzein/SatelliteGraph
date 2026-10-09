@@ -47,3 +47,17 @@ def build_context(options: dict, output: Path) -> RunContext:
     context=RunContext(Path(output).resolve(),years,dict(options),model_provenance(options,root),input_fingerprint(options))
     atomic_json(context.output/'context.json',context)
     return context
+
+
+def load_context(output,options=None):
+    from .storage import read_json
+    from .contracts import GridSpec,TileInput,YearInput
+    value=read_json(Path(output)/'context.json');years=[]
+    for year in value['years']:
+        tiles=[]
+        for tile in year['tiles']:
+            grid=tile['grid'];grid=GridSpec(grid['crs'],tuple(grid['affine']),grid['units'],tuple(grid['physical_pixel_size']) if grid.get('physical_pixel_size') else None)
+            tiles.append(TileInput(tile['key'],tile['year'],Path(tile['image']),Path(tile['metadata']) if tile['metadata'] else None,
+                tile['source_id'],tuple(tile['offset_xy']),tuple(tile['shape_hw']),grid,tuple(tile['valid_extent_hw'])))
+        years.append(YearInput(year['year'],tuple(tiles),Path(year['source_raster']) if year.get('source_raster') else None))
+    return RunContext(Path(output).resolve(),tuple(years),{**value['options'],**(options or {})},value['models'],value['fingerprint'])

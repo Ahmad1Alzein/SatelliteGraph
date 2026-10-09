@@ -295,6 +295,10 @@ def _add_pipeline_parser(commands) -> None:
         old.add_argument("--max-comparison-pixels",type=int,default=None)
         old.add_argument("--gnn-epochs",type=int,default=None)
         old.add_argument("--gnn-hidden",type=int,default=None)
+        old.add_argument("--change-policy",default=None,help="JSON overrides for all-class image evidence thresholds")
+        old.add_argument("--reviewed-targets",default=None,help="Reviewed per-node class gain/loss target CSV")
+        old.add_argument("--max-report-pixels",type=int,default=None,help="Maximum pixels in the complete paired change report (default: 128000000)")
+        old.add_argument("--registration-max-residual",type=float,default=None,help="RANSAC landmark tolerance in comparison units (default: 2 metres)")
         old.add_argument("--harmonize-images",action=argparse.BooleanOptionalAction,default=None,
                          help="Match paired image brightness and sharpness before segmentation")
         reg = old.add_mutually_exclusive_group()
@@ -495,7 +499,7 @@ def main(argv: list[str] | None = None) -> None:
                 "boundary_tolerance": args.boundary_tolerance, "config": resolve(args.config),
                 "no_progress": args.no_progress,
             }
-            for key in ('pixel_size','device','semantic_models','gnn_checkpoint','target_crs','target_resolution','inference_window','inference_overlap','tta','max_pixels','max_comparison_pixels','gnn_epochs','gnn_hidden','harmonize_images'):
+            for key in ('pixel_size','device','semantic_models','gnn_checkpoint','target_crs','target_resolution','inference_window','inference_overlap','tta','max_pixels','max_comparison_pixels','gnn_epochs','gnn_hidden','harmonize_images','change_policy','reviewed_targets','max_report_pixels','registration_max_residual'):
                 options[key]=getattr(args,key)
             output = resolve(args.output)
             if args.phase == "run":
