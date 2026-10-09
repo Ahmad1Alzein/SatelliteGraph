@@ -18,6 +18,18 @@ def test_stage_options_and_standalone_results_are_retained(tmp_path,input_pair):
     assert state['stages']['change']['scientific_status']=='complete'
 
 
+def test_later_stages_reuse_exact_prepared_registration(tmp_path,input_pair,monkeypatch):
+    from src import pipeline_select as ps
+    import pipelines.semantic_temporal.runtime.runner as runner
+    output=tmp_path/'run'
+    ps.segment('new',output,**input_pair)
+    controls=sha256(output/'prepared/registration_controls.json')
+    monkeypatch.setattr(runner,'prepare_comparison',lambda *a:pytest.fail('Repeated registration after segmentation'))
+    ps.graph('new',output)
+    ps.change('classical',output)
+    assert sha256(output/'prepared/registration_controls.json')==controls
+
+
 def test_render_failure_keeps_science_complete(tmp_path,input_pair,monkeypatch):
     from src import pipeline_select as ps
     output=tmp_path/'run'

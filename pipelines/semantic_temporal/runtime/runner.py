@@ -54,7 +54,13 @@ def relocate_run(output,state):
 
 def execute_stage(output,stage,method,options,state):
     from .visualization import validate_run,render_outputs
-    context=prepare_comparison(build_context(options,output))
+    # Alignment is an upstream scientific input, not a per-stage estimate.
+    # Re-fitting here can move graph geometry away from segmented pixels.
+    if stage=='segmentation':
+        context=prepare_comparison(build_context(options,output))
+    else:
+        from .context import load_context
+        context=load_context(output,options)
     from .preprocessing import prepare_model_inputs
     context=prepare_model_inputs(context)
     if stage=='segmentation':
