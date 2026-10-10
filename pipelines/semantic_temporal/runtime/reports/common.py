@@ -59,6 +59,37 @@ def sample_rgb(frame,year,bounds,size):
     return rgb,valid
 
 
+def sample_original_rgb(frame,year,bounds,size):
+    """Resample the original inputs once, bypassing model/comparison upsampling."""
+    sources=frame['data'][year].get('native_sources')
+    if not sources:return sample_rgb(frame,year,bounds,size)
+    from rasterio.warp import reproject
+    from rasterio.enums import Resampling
+    grid=frame['grid'];view=view_affine(bounds,size,flip_y=bool(grid.crs) or grid.affine[4]<0)
+    result=np.zeros((*size[::-1],3),np.uint8);observed=np.zeros(size[::-1],bool)
+    for source in sources:
+        destination=(~source['registration'])*view
+        def warp(values,nearest=False):
+            if source['crs'] and source['target_crs'] and source['crs']!=source['target_crs']:
+                out=np.zeros(size[::-1],np.float32)
+                reproject(values.astype(np.float32),out,src_transform=source['affine'],src_crs=source['crs'],
+                    dst_transform=destination,dst_crs=source['target_crs'],
+                    resampling=Resampling.nearest if nearest else Resampling.bilinear)
+                return out
+            return warp_array(values.astype(np.float32),source['affine'],destination,size[::-1],nearest=nearest)
+        valid=source['valid'];weight=warp(valid)
+        take=(warp(valid,True)>.5)&~observed
+        if 'ownership' in source:
+            take&=warp_array(source['ownership'].astype(np.uint8),source['ownership_affine'],
+                view,size[::-1],nearest=True)>0
+        for channel in range(3):
+            pixels=warp(source['rgb'][:,:,channel].astype(np.float32)*valid)
+            pixels=np.divide(pixels,weight,out=np.zeros_like(pixels),where=weight>1e-8)
+            result[:,:,channel][take]=np.clip(np.rint(pixels[take]),0,255).astype(np.uint8)
+        observed|=take
+    return result,observed
+
+
 def display_rgb(rgb,valid):
     result=rgb.copy();yy,xx=np.indices(valid.shape);shade=np.where((xx//8+yy//8)%2,220,240).astype(np.uint8)
     result[~valid]=shade[~valid,None]

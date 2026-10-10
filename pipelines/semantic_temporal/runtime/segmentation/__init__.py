@@ -16,7 +16,6 @@ from .parcels import FOUR
 
 def segment_tile(tile,context,*,models=None):
     rgb,valid,grid=prepare_tile(tile,context)
-    if grid.units!='metres': raise ValueError('Segmentation metric rules require physical pixel size; supply --pixel-size')
     transform=Affine(*grid.affine)*Affine.scale(.5,.5)
     area=abs(transform.determinant);pixel=math.sqrt(area)
     shape=(valid.shape[0]*2,valid.shape[1]*2)
@@ -57,7 +56,7 @@ def segment_tile(tile,context,*,models=None):
     directory=context.output/'segmentation'/str(tile.year)/tile.key
     paths={k:directory/name for k,name in {'labels':'segment_ids.tif','classes':'segment_classes.tif','valid':'valid_mask.tif',
           'probabilities':'probabilities.npy','image':'rgb.tif','nodes':'nodes.csv','lineage':'lineage.json','validation':'validation.json','merges':'merge_log.csv'}.items()}
-    outgrid=replace(grid,affine=tuple(transform)[:6],physical_pixel_size=(pixel,pixel))
+    outgrid=replace(grid,affine=tuple(transform)[:6],physical_pixel_size=(pixel,pixel) if grid.units=='metres' else None)
     write_raster(paths['labels'],result,outgrid,nodata=0);write_raster(paths['classes'],class_map,outgrid,nodata=255)
     write_raster(paths['valid'],observed.astype(np.uint8),outgrid,nodata=0);write_raster(paths['image'],image.transpose(2,0,1),outgrid)
     original,_,_=prepare_tile(tile,context,model=False)

@@ -4,7 +4,7 @@ import hashlib
 import json
 
 GRAPH_PROFILE = 'directional-all-class.v1'
-RENDER_PROFILE = 'all-class-results.v1'
+RENDER_PROFILE = 'major-changes-native-owned-crops.v4'
 
 
 def stage_fingerprint(inputs: list[Path], settings: dict) -> str:
@@ -22,6 +22,7 @@ def input_fingerprint(options: dict) -> str:
             'checkpoints', 'semantic_models','config','old_config','pixel_size','processing_scale','target_resolution',
             'target_crs','registration_json','register_images','registration_max_residual','inference_window','inference_overlap','tta')
     settings = {k: options[k] for k in keys if options.get(k) is not None}
+    settings['input_profile']='auto-multiscale-pixel-pair-and-natural-row.v3'
     if options.get('register_images'):settings['registration_profile']='guided-current-images.v1'
     if options.get('harmonize_images'):
         settings['harmonize_images'] = True
@@ -35,7 +36,7 @@ def input_fingerprint(options: dict) -> str:
         rasters=options.get('source_rasters') or []
         if index>=len(metadata) or metadata[index] is None:
             if (p.parent/'metadata.csv').is_file(): files.append(p.parent/'metadata.csv')
-        if index>=len(rasters) or rasters[index] is None:
+        if ((p.parent/'metadata.csv').is_file() or (index<len(metadata) and metadata[index])) and (index>=len(rasters) or rasters[index] is None):
             files.extend(f for f in p.parent.iterdir() if f.is_file() and f.suffix.lower() in ('.tif','.tiff'))
     # The old backends load assets referenced in configuration, outside the new
     # semantic model directory. Bind those bytes as well as the YAML itself.
@@ -54,11 +55,22 @@ def input_fingerprint(options: dict) -> str:
                     p=Path(model[key]);p=p if p.is_absolute() else root/p
                     if p.is_file(): files.append(p)
     for key, value in settings.items():
-        if key == 'years' or isinstance(value, dict) or key in ('pixel_size','processing_scale','target_resolution','target_crs','register_images','registration_max_residual','registration_profile','inference_window','inference_overlap','tta','harmonize_images','preprocessing_profile'):
+        if key == 'years' or isinstance(value, dict) or key in ('input_profile','pixel_size','processing_scale','target_resolution','target_crs','register_images','registration_max_residual','registration_profile','inference_window','inference_overlap','tta','harmonize_images','preprocessing_profile'):
             continue
         for item in value if isinstance(value, list) else [value]:
             if item is None: continue
             p = Path(item)
+            if p.is_dir() and (key == 'semantic_models' or (key == 'checkpoints'
+                    and options.get('semantic_models')
+                    and p.resolve() == Path(options['semantic_models']).resolve())):
+                # Bind the assets consumed by segmentation. Nested GNN weights
+                # belong to change_fingerprint, so replacing them must not
+                # invalidate completed segmentation and spatial graphs.
+                files.extend(f for f in (p/'DelineateAnythingv2.pt',
+                    p/'satlens-segformer/config.json',
+                    p/'satlens-segformer/preprocessor_config.json',
+                    p/'satlens-segformer/model.safetensors') if f.is_file())
+                continue
             if p.is_file(): files.append(p)
             elif p.is_dir():
                 for f in p.rglob('*'):
@@ -77,7 +89,7 @@ def validate_resume(state: dict, stage: str, fingerprint: str) -> None:
 
 def change_fingerprint(options: dict) -> str:
     settings={k:options.get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance','change_policy','reviewed_targets')}
-    settings['algorithm']='all-class-image-evidence-and-rgnn.v1'
+    settings['algorithm']='all-class-measured-boundary-margin.v3'
     files=[]
     for key in ('change_policy','reviewed_targets'):
         if options.get(key):

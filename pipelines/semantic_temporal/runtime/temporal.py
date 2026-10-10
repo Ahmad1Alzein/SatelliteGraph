@@ -308,6 +308,15 @@ def _detect_legacy_classical(graph,context):
     return result
 
 
+def boundary_margin(context):
+    """Exclude boundary movement within measured alignment uncertainty by default."""
+    supplied=context.options.get('boundary_tolerance')
+    if supplied is not None:return supplied
+    registration=context.options.get('registration') or {}
+    key='inlier_p95_pixels' if registration.get('units')=='pixels' else 'inlier_p95_m'
+    return max(0.,float(registration.get(key,0.)))
+
+
 def detect_classical(graph,context):
     """Preserve the prior method result and publish exhaustive image evidence."""
     from .comparison import load_comparison
@@ -328,9 +337,13 @@ def detect_classical(graph,context):
     else:
         pd.DataFrame(columns=['gid','label','confidence','source','year']).to_csv(legacy_targets,index=False)
     policy=load_change_policy(context.options.get('change_policy'))
-    frame=load_comparison(graph,context);evidence=detect_evidence(frame,policy)
+    margin=boundary_margin(context)
+    frame=load_comparison(graph,context);evidence=detect_evidence(frame,policy,boundary_tolerance=margin)
     result=build_change_catalog(graph,frame,evidence,policy,reviewed_targets=context.options.get('reviewed_targets'))
-    result.update(legacy_engine=legacy['engine'],legacy_report=str(legacy_path))
+    result.update(legacy_engine=legacy['engine'],legacy_report=str(legacy_path),
+        effective_boundary_tolerance=margin,
+        measurement_policy='Metric thresholds in metres/metres squared' if frame['grid'].units=='metres' else
+            'Image-relative thresholds in pixels/pixels squared; no physical ground scale is assumed')
     atomic_json(graph.directory/'classical_changes.json',result)
     pd.DataFrame(result['targets'],columns=['gid','task','label','confidence','source','year','eligible','reason']).to_csv(graph.paths['targets'],index=False)
     write_raster(graph.directory/'class_transition_map.tif',evidence['transition'],frame['grid'],nodata=65535)

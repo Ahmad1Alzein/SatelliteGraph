@@ -105,7 +105,7 @@ def build_change_catalog(graph,frame,evidence,policy,*,reviewed_targets=None):
                     'unknown_counterpart' if known<policy['known_fraction'] else
                     'shadow_or_alignment' if clear<policy['observed_fraction'] else
                     'low_confidence' if node['confidence']<policy['reliable_confidence'] else
-                    'physical_scale_unavailable' if frame['grid'].units!='metres' else 'no_reliable_change_or_stability')
+                    'no_reliable_change_or_stability')
             eligible=reason=='no_reliable_change_or_stability'
             changed=stats['changed'][ident];largest=stats['largest'][ident]
             if eligible:
@@ -148,7 +148,7 @@ def build_change_catalog(graph,frame,evidence,policy,*,reviewed_targets=None):
             descriptors={source_task:['contraction' if any(same[i] for i in source_ids) else 'disappearance'],
                          target_task:['expansion' if any(same[i] for i in target_ids) else 'appearance']}
             supporting=[target_lookup[gid,task] for task,gids in [(source_task,source_ids),(target_task,target_ids)] for gid in gids]
-            seasonal=source_class in SEASONAL and target_class in SEASONAL
+            seasonal=source_class in SEASONAL or target_class in SEASONAL
             reviewed_positive=any(r['label']==1 and r['reason']=='reviewed' and r['confidence']>=policy['reliable_confidence'] for r in supporting)
             status='reliable' if reviewed_positive else 'season_sensitive' if seasonal else 'reliable' if any(r['label']==1 for r in supporting) else 'candidate'
             ident=hashlib.sha256(f'{first}:{last}:{source_class}:{target_class}:'.encode()+geometry.wkb).hexdigest()[:16]

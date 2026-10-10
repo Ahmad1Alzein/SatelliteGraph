@@ -68,7 +68,7 @@ def _row(ident,klass,geom,rgb,probabilities,members,year,evidence):
 def _edges(nodes,touches,method,units,near_distance=25.,near_k=6):
     by_id={n['id']:n for n in nodes};geoms={n['id']:shape(n['geometry']) for n in nodes}
     pairs={(min(a,b),max(a,b)):('touches',length,0.) for a,b,length in touches}
-    if method=='new' and units=='metres':
+    if method=='new' and units in ('metres','pixels'):
         ids=[n['id'] for n in nodes if n['class_id']==1];shapes=[geoms[i] for i in ids];tree=STRtree(shapes)
         for i,ident in enumerate(ids):
             candidates=[]

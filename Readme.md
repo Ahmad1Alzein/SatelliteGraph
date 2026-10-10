@@ -480,3 +480,5 @@ config paths are resolved from that project root.
 ## All-class native change pipeline
 
 The general pipeline now extends the existing RGNN to eight land-cover classes with sixteen gain/loss tasks, retains separate segmentation and graph PNGs, and generates registration/object-matching views and one combined paired-crop `change_report.png`. Start with [All-class change results and native commands](docs/all-class-change-results.md). The original image/folder pipeline and frozen study remain available.
+
+Run `python -m streamlit run streamlit_app.py` for two-image uploads, stage inspection, major-change filtering and local paired-crop grid downloads. Two PNGs need no metadata; folder placement accepts CSV offsets or naturally ordered left-to-right tiles. Optional annotation-supervised external GNN training and its data license are described in the same guide.

@@ -59,4 +59,6 @@ def test_model_status_is_not_a_physical_change_name():
     c = contracts()
     assert c.status_label('insufficient_data') == 'Not enough training examples'
     assert c.status_label('training_only') == 'Trained on this area; not independently tested'
+    assert c.status_label('inference') == 'Saved model prediction'
+    assert c.status_label('trained') == 'Trained; see evaluation'
     assert c.EDGE_LABELS['t_primary_bwd'] == 'Main match across years'

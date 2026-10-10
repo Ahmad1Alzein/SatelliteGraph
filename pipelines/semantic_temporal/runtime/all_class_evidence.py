@@ -1,5 +1,6 @@
 """Symmetric class gain/loss evidence with explicit unknown and observation masks."""
 import cv2
+import math
 import numpy as np
 from scipy import ndimage
 from affine import Affine
@@ -13,9 +14,14 @@ def _components(mask,pixel_area,minimum):
     return keep[labels]
 
 
-def detect_evidence(frame,policy):
+def detect_evidence(frame,policy,*,boundary_tolerance=0):
     first,last=frame['years'];a,b=frame['data'][first],frame['data'][last]
     area=abs(Affine(*frame['grid'].affine).determinant);pixel=np.sqrt(area)
+    if isinstance(boundary_tolerance,bool) or not math.isfinite(boundary_tolerance) or boundary_tolerance<0:
+        raise ValueError('Boundary tolerance must be finite and nonnegative')
+    def beyond(mask):
+        if boundary_tolerance==0 or not mask.any():return np.ones(mask.shape,bool)
+        return ndimage.distance_transform_edt(~mask,sampling=pixel)>boundary_tolerance
     common=a['valid']&b['valid'];known=common&np.isin(a['classes'],range(1,9))&np.isin(b['classes'],range(1,9))
     clear=[cv2.cvtColor(d['rgb_original'],cv2.COLOR_RGB2GRAY)>=policy['shadow_cutoff'] for d in (a,b)]
     eligible=known&clear[0]&clear[1]
@@ -53,8 +59,9 @@ def detect_evidence(frame,policy):
         absent_old=ndimage.maximum_filter(np.where(ok,old_max,1.),size=window,mode='constant',cval=1.)<=policy['absence_probability']
         absent_new=ndimage.maximum_filter(np.where(ok,new_max,1.),size=window,mode='constant',cval=1.)<=policy['absence_probability']
         present_old=old>=present_threshold;present_new=new>=present_threshold
-        gain=ok&(b['classes']==klass)&present_new&absent_old
-        loss=ok&old_class&present_old&absent_new
+        gain_domain=beyond(old_class);loss_domain=beyond(b['classes']==klass)
+        gain=ok&(b['classes']==klass)&present_new&absent_old&gain_domain
+        loss=ok&old_class&present_old&absent_new&loss_domain
         if klass==1:
             gain=ndimage.binary_opening(gain,structure=ndimage.generate_binary_structure(2,1))
             loss=ndimage.binary_opening(loss,structure=ndimage.generate_binary_structure(2,1))
@@ -62,13 +69,15 @@ def detect_evidence(frame,policy):
             task=f'{name}_{direction}';raw[task]=mask
             masks[task]=_components(mask,area,policy['minimum_area_m2'][name])
             changed=(~old_class&(b['classes']==klass)) if direction=='gain' else (old_class&(b['classes']!=klass))
-            candidates[task]=_components(ok&changed,area,policy['minimum_area_m2'][name])
+            candidates[task]=_components(ok&changed&(gain_domain if direction=='gain' else loss_domain),area,policy['minimum_area_m2'][name])
         stable[name]=ok&old_class&(b['classes']==klass)&present_old&present_new
     old_veg=a['shape_probabilities'][3:6].sum(0);new_veg=b['shape_probabilities'][3:6].sum(0)
     old_veg_max=a['max_probabilities'][3:6].sum(0);new_veg_max=b['max_probabilities'][3:6].sum(0)
     veg_ok=eligible&~roof_disagreement
     vegetation_gain=veg_ok&(new_veg>=policy['presence_probability'])&(ndimage.maximum_filter(np.where(veg_ok,old_veg_max,1.),size=window,mode='constant',cval=1.)<=policy['absence_probability'])
     vegetation_loss=veg_ok&(old_veg>=policy['presence_probability'])&(ndimage.maximum_filter(np.where(veg_ok,new_veg_max,1.),size=window,mode='constant',cval=1.)<=policy['absence_probability'])
+    vegetation_gain&=beyond(np.isin(a['classes'],[3,4,5]))
+    vegetation_loss&=beyond(np.isin(b['classes'],[3,4,5]))
     return {'masks':masks,'raw_masks':raw,'candidate_masks':candidates,'stable':stable,
             'transition':transition,'transition_encoding':{'known':'16 * source_class + target_class','unknown':0,'unobserved':65535},
             'common_valid':common,'known':known,'eligible':eligible,'roof_eligible':roof_eligible,

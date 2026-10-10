@@ -78,7 +78,8 @@ def _polygon(draw,polygon,to_pixel,fill,outline):
         for ring in part.interiors: draw.polygon([to_pixel(x,y) for x,y in ring.coords],fill='white',outline=outline)
 
 
-def render_outputs(context,stage):
+def render_outputs(context,stage,*,include_results=False):
+    """Retain legacy preview return values; orchestration requests indexed results."""
     directory=context.output/'previews';directory.mkdir(exist_ok=True);paths={};years=set();units=set()
     for number,path in enumerate(sorted(context.output.rglob('artifact.json'))):
         artifact=read_json(path);grid=artifact.get('grid',{});units.add(grid.get('units',''))
@@ -115,6 +116,7 @@ def render_outputs(context,stage):
     index={'stage':stage,'years':sorted(y for y in years if y is not None),'units':sorted(u for u in units if u),
            'classes':CLASSES,'previews':{k:str(v.relative_to(context.output)) for k,v in paths.items()}}
     atomic_json(context.output/'preview_index.json',index)
+    previews=dict(paths)
     if stage in ('segmentation','graph'):
         from .reports.stages import render_stage_results
         paths.update(render_stage_results(context,stage))
@@ -126,8 +128,11 @@ def render_outputs(context,stage):
         value=read_json(context.output/'temporal/artifact.json')
         graph=TemporalArtifact(tuple(value['years']),Path(value['directory']),{k:Path(v) for k,v in value['paths'].items()})
         frame=load_comparison(graph,context);catalog=read_json(graph.directory/'classical_changes.json')
-        report=graph.directory/'gnn/report.json';method=read_json(context.output/'run.json')['stages']['change']['method']
+        report=graph.directory/'gnn/report.json';ledger=context.output/'run.json'
+        method=(read_json(ledger).get('stages',{}).get('change',{}).get('method')
+                if ledger.is_file() else context.options.get('change_method'))
+        if method is None:method='gnn' if report.is_file() else 'classical'
         gnn=read_json(report) if method=='gnn' and report.is_file() else None
         paths.update(render_matching_results(graph,context,frame,catalog))
         paths.update(render_change_results(graph,context,frame,catalog,gnn))
-    return paths
+    return paths if include_results else previews

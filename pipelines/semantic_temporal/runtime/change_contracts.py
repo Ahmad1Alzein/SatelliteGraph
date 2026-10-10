@@ -109,4 +109,7 @@ def status_label(status: str) -> str:
             'unassessed': 'Cannot assess', 'insufficient_data': 'Not enough training examples',
             'training_only': 'Trained on this area; not independently tested',
             'season_sensitive': 'Season may explain this', 'complete': 'Ready',
-            'ineligible': 'Cannot assess'}.get(status, 'Needs review')
+            'ineligible': 'Cannot assess', 'inference': 'Saved model prediction',
+            'trained': 'Trained; see evaluation',
+            'supervised_external': 'Supervised external model',
+            'insufficient_validation': 'Not enough validated examples'}.get(status, 'Needs review')

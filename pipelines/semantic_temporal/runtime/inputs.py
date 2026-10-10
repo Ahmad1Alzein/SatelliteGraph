@@ -1,7 +1,8 @@
-"""Validate original image placement; never infer a mosaic from filenames."""
+"""Validate supplied placement, or explicitly use the requested left-to-right row."""
 from pathlib import Path
 import csv
 import math
+import re
 import numpy as np
 from PIL import Image
 import rasterio
@@ -51,7 +52,9 @@ def _grid(transform, crs, scale=None):
 
 def _one_year(folder, year, *, selected=None, metadata=None, raster=None, scale=None):
     if not folder.is_dir(): raise ValueError(f'Image folder not found: {folder}')
-    images=[selected] if selected else sorted(p for p in folder.iterdir() if p.suffix.lower()=='.png')
+    def natural(path):
+        return [int(s) if s.isdigit() else s.casefold() for s in re.split(r'(\d+)',path.name)]
+    images=[selected] if selected else sorted((p for p in folder.iterdir() if p.suffix.lower()=='.png'),key=natural)
     if not images:
         images=sorted(p for p in folder.iterdir() if p.suffix.lower() in ('.tif','.tiff'))
     if not images: raise ValueError(f'No RGB images in {folder}')
@@ -67,7 +70,16 @@ def _one_year(folder, year, *, selected=None, metadata=None, raster=None, scale=
             tiles.append(TileInput(key,year,image,None,str(image),(0,0),rgb.shape[:2],grid,rgb.shape[:2]))
         return YearInput(year,tuple(tiles),None)
     meta=metadata or folder/'metadata.csv'
-    if not meta.is_file(): raise ValueError('Placement metadata.csv with tile_name, x0 and y0 is required')
+    if not meta.is_file():
+        if metadata or raster:
+            raise ValueError('Explicit source placement requires metadata.csv with tile_name, x0 and y0')
+        tiles=[];x=0
+        for image in images:
+            rgb,valid=_read_image(image);h,w=rgb.shape[:2]
+            tiles.append(TileInput(f'{year}/{image.name}',year,image,None,str(folder),
+                (x,0),(h,w),_grid(Affine.translation(x,0),None,scale),(h,w)))
+            x+=w
+        return YearInput(year,tuple(tiles),None)
     with meta.open(newline='',encoding='utf-8-sig') as stream:
         reader=csv.DictReader(stream)
         if not {'tile_name','x0','y0'}.issubset(reader.fieldnames or []):
@@ -127,7 +139,8 @@ def inspect_inputs(options: dict, project_root: Path) -> tuple[YearInput,...]:
     years=options.get('years')
     if years is None:
         try: years=[int(p.parent.name if singles else p.name) for p in paths]
-        except ValueError: raise ValueError('Supply --years when folder names are not year numbers') from None
+        except ValueError: years=list(range(1,len(paths)+1))
+        if len(set(years))!=len(years): years=list(range(1,len(paths)+1))
     if len(years)!=len(paths) or any(not isinstance(y,int) or isinstance(y,bool) or not 1<=y<=9999 for y in years):
         raise ValueError('Supply one valid year per input')
     if len(years)==2 and years[0]>=years[1]: raise ValueError('Years must be distinct and chronological')

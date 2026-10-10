@@ -100,5 +100,34 @@ def _load_document(doc,context):
         data[annual['year']]={'labels':labels,'classes':classes,'valid':observed,
             'rgb_original':original,'rgb_model':model,'shape_probabilities':probabilities,
             'max_probabilities':maxima,'node_ids':{i+1:n['id'] for i,n in enumerate(subset)}}
+    # Retain native RGB for report crops. Model RGB and comparison rasters are
+    # resampled for science; repeated interpolation must not soften the preview.
+    from .inputs import read_tile
+    from .registration import _world_points
+    native_sizes=[]
+    ownership={}
+    for annual in annuals:
+        for tile_path in annual['source_tiles']:
+            tile_doc=read_json(Path(tile_path)/'graph.json');artifact=load_segmentation(tile_doc['segmentation_artifact'])
+            key=f'{artifact.year}:{artifact.tile_key}'
+            ownership[key]=(read_band(annual['source_ownership'][key])>0,Affine(*artifact.grid.affine))
+    for year in context.years:
+        if year.year not in data:continue
+        sources=[]
+        for tile in year.tiles:
+            rgb,valid=read_tile(tile);source_affine=Affine(*tile.grid.affine)
+            if not tile.grid.crs and tile.grid.physical_pixel_size:
+                source_affine=Affine.scale(*tile.grid.physical_pixel_size)*source_affine
+            registration=Affine.identity()
+            if context.options.get('registration') and tile.year==context.years[0].year:
+                registration=Affine(*context.options['registration']['affine'])
+            owner,owner_affine=ownership[f'{tile.year}:{tile.key}']
+            sources.append(dict(rgb=rgb,valid=valid,affine=source_affine,crs=tile.grid.crs,
+                target_crs=context.options.get('target_crs') or tile.grid.crs,registration=registration,
+                ownership=owner,ownership_affine=owner_affine))
+            p=_world_points(tile,[(0,0),(1,0),(0,1)],context)
+            native_sizes.extend([float(np.linalg.norm(p[1]-p[0])),float(np.linalg.norm(p[2]-p[0]))])
+        data[year.year]['native_sources']=sources
     return {'grid':GridSpec(base['crs'],tuple(affine)[:6],doc['units'],(resolution,resolution) if doc['units']=='metres' else None),
-            'years':tuple(doc['years']),'shape_hw':shape_hw,'data':data}
+            'years':tuple(doc['years']),'shape_hw':shape_hw,'data':data,
+            'source_pixel_size':max(native_sizes,default=resolution)}

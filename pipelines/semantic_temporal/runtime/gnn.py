@@ -9,7 +9,7 @@ from affine import Affine
 from shapely.geometry import Polygon,shape
 from .storage import atomic_json,read_json,sha256,save_manifest
 from .registration import prepare_tile
-from .gnn_model import RGNN
+from .gnn_model import RGNN,model_from_settings
 
 
 def evaluation_groups(context):
@@ -253,15 +253,32 @@ def run_gnn(graph,context,*,checkpoint=None):
                         or not isinstance(threshold,(int,float)) or not np.isfinite(threshold) or not 0<=threshold<=1):
                     raise ValueError('GNN checkpoint head support/threshold schema is invalid')
                 head.update(status='inference',reason='Compatible saved class-change head')
+        if metadata.get('inference_eligibility')=='observed_known_class_node.v1':
+            # External annotations supervise these nodes independently of the
+            # pseudo-label confidence of the OTHER year's segmentation. Keep
+            # coverage/current-class gates; do not reuse this for pseudo training.
+            eligible[:]=False
+            for i,gid in enumerate(ids):
+                node=by_id[gid];klass=node['class_id']
+                if klass not in KNOWN_CLASSES:continue
+                task=KNOWN_CLASSES[klass]+('_gain' if node['year']==last else '_loss')
+                eligible[i,TASKS.index(task)]=(node['observed_fraction']>=policy['observed_fraction']
+                    and node['confidence']>=policy['reliable_confidence'])
+            result['inference_eligibility']='Observed known-class nodes; counterpart segmentation may be uncertain. Scores remain model predictions.'
         _check_task_normalization(norm,x,relations)
         tensor,r=tensor_inputs(x,relations,norm)
-        model=RGNN(x.shape[1],r,hidden=settings['hidden'],edge_dim=settings['edge_dim'],tasks=TASKS)
+        model=model_from_settings(x.shape[1],r,settings,TASKS)
         model.load_state_dict(torch.load(checkpoint,map_location='cpu',weights_only=True),strict=True);model.eval()
         with torch.no_grad():probabilities=torch.sigmoid(model(tensor,r)).numpy()
         evaluation=np.full(probabilities.shape,np.nan);eval_decisions=np.full(probabilities.shape,-1)
         for j,task in enumerate(TASKS):
             if not heads[task]['available']:probabilities[:,j]=np.nan
         result.update(status='inference',checkpoint=str(checkpoint),folds=0)
+        if 'external_evaluation' in metadata:
+            result['evaluation']={'status':'external_annotated_subset',
+                'per_task':metadata['external_evaluation'],'dataset':metadata.get('dataset',{}),
+                'domain':metadata.get('domain'),'user_imagery_accuracy':'not measured',
+                'reason':'Held-out annotated external nodes; not measured accuracy on these input images'}
     else:
         trained=train_tasks(x,relations,labels,eligible,groups,settings)
         heads=trained['heads'];probabilities=trained['probabilities'];evaluation=trained['evaluation_probabilities'];eval_decisions=trained['evaluation_predictions']

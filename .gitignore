@@ -62,6 +62,7 @@ coverage.xml
 /data/raw/
 /data/tiles/
 /data/metadata/
+/data/external_training/
 /tiles17_23/
 /outputs/
 /artifacts/

@@ -134,3 +134,43 @@ def test_checkpoint_declared_task_order_is_verified(tmp_path):
     metadata['task_order']=list(reversed(metadata['task_order']));atomic_json(path,metadata)
     with pytest.raises(ValueError,match='schema'):
         run_gnn(graph,context,checkpoint=result['checkpoint'])
+
+
+def test_external_checkpoint_keeps_evaluation_provenance(tmp_path):
+    from tests.test_semantic_temporal import temporal_fixture
+    from pipelines.semantic_temporal.runtime.temporal import detect_classical
+    from pipelines.semantic_temporal.runtime.gnn import run_gnn
+    from pipelines.semantic_temporal.runtime.storage import read_json,atomic_json
+    graph,context=temporal_fixture(tmp_path);detect_classical(graph,context)
+    trained=run_gnn(graph,replace(context,options={'gnn_epochs':1,'gnn_hidden':8}))
+    path=Path(trained['checkpoint']).with_suffix('.json');metadata=read_json(path)
+    metadata.update(dataset={'dataset':'https://doi.org/10.5281/zenodo.17765755'},
+        external_evaluation={'building_gain':{'precision':.9,'recall':.7}},domain='External optical RGB; transfer unverified')
+    atomic_json(path,metadata)
+    result=run_gnn(graph,context,checkpoint=trained['checkpoint'])
+    assert result['evaluation']['status']=='external_annotated_subset'
+    assert result['evaluation']['user_imagery_accuracy']=='not measured'
+    assert result['evaluation']['per_task']['building_gain']['precision']==.9
+
+
+def test_external_inference_scores_observed_nodes_without_requiring_pseudo_label_eligibility(tmp_path):
+    from tests.test_semantic_temporal import temporal_fixture
+    from pipelines.semantic_temporal.runtime.temporal import detect_classical
+    from pipelines.semantic_temporal.runtime.gnn import run_gnn
+    from pipelines.semantic_temporal.runtime.storage import read_json,atomic_json
+    graph,context=temporal_fixture(tmp_path);detect_classical(graph,context)
+    trained=run_gnn(graph,replace(context,options={'gnn_epochs':1,'gnn_hidden':8}))
+    checkpoint=Path(trained['checkpoint']);metadata=read_json(checkpoint.with_suffix('.json'))
+    metadata['inference_eligibility']='observed_known_class_node.v1';atomic_json(checkpoint.with_suffix('.json'),metadata)
+    catalog=read_json(graph.directory/'classical_changes.json')
+    for node in catalog['node_changes']:node['eligible']=False
+    atomic_json(graph.directory/'classical_changes.json',catalog)
+    document=read_json(graph.paths['graph'])
+    gain=[n for n in document['nodes'] if n['class_id']==1 and n['year']==document['years'][-1]]
+    assert len(gain)>=2
+    gain[0]['observed_fraction']=.5;gain[1]['known_counterpart_fraction']=0
+    atomic_json(graph.paths['graph'],document)
+    result=run_gnn(graph,context,checkpoint=checkpoint);rows=pd.read_csv(result['predictions'])
+    assert rows[(rows.gid==gain[0]['id'])&(rows.task=='building_gain')].probability.isna().all()
+    assert rows[(rows.gid==gain[1]['id'])&(rows.task=='building_gain')].probability.notna().all()
+    assert rows[rows.task=='water_gain'].probability.isna().all()

@@ -30,7 +30,7 @@ def test_missing_and_duplicate_metadata_are_rejected(tmp_path):
     folder = make_year(tmp_path)
     meta = folder/'metadata.csv'
     original = meta.read_text(); meta.unlink()
-    with pytest.raises(ValueError, match='metadata'): inspect({'folders':[str(folder)]}, tmp_path)
+    with pytest.raises(ValueError, match='metadata'): inspect({'folders':[str(folder)],'metadata':[str(meta)]}, tmp_path)
     meta.write_text(original + original.splitlines()[1] + '\n')
     with pytest.raises(ValueError, match='duplicate'): inspect({'folders':[str(folder)]}, tmp_path)
 

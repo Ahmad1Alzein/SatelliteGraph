@@ -32,15 +32,15 @@ def test_non_square_masked_tile_is_fully_segmented_and_georeferenced(tmp_path):
     for ident in np.unique(labels[valid]): assert ndimage.label(labels==ident)[1]==1
 
 
-def test_segmentation_requires_physical_scale_for_metric_rules(tmp_path):
-    import pytest
+def test_segmentation_without_physical_scale_records_pixel_measurements(tmp_path):
     from pipelines.semantic_temporal.runtime.context import build_context
     from pipelines.semantic_temporal.runtime.registration import prepare_comparison
     from pipelines.semantic_temporal.runtime.segmentation import segment_tile
     folder=make_year(tmp_path); (folder/'source.tif').unlink()
     context=prepare_comparison(build_context({'folders':[str(folder)]},tmp_path/'run'))
-    with pytest.raises(ValueError,match='pixel size'):
-        segment_tile(context.years[0].tiles[0],context,models=TreeModels())
+    artifact=segment_tile(context.years[0].tiles[0],context,models=TreeModels())
+    assert artifact.grid.units=='pixels'
+    assert artifact.grid.physical_pixel_size is None
 
 
 def test_unknown_observations_and_disconnected_islands_survive(tmp_path):

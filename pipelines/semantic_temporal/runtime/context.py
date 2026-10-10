@@ -52,6 +52,7 @@ def build_context(options: dict, output: Path) -> RunContext:
 def load_context(output,options=None):
     from .storage import read_json
     from .contracts import GridSpec,TileInput,YearInput
+    verify_prepared_context(output)
     value=read_json(Path(output)/'context.json');years=[]
     for year in value['years']:
         tiles=[]
@@ -61,3 +62,28 @@ def load_context(output,options=None):
                 tile['source_id'],tuple(tile['offset_xy']),tuple(tile['shape_hw']),grid,tuple(tile['valid_extent_hw'])))
         years.append(YearInput(year['year'],tuple(tiles),Path(year['source_raster']) if year.get('source_raster') else None))
     return RunContext(Path(output).resolve(),tuple(years),{**value['options'],**(options or {})},value['models'],value['fingerprint'])
+
+
+def seal_prepared_context(context):
+    """Freeze the context consumed by segmentation, including measured alignment."""
+    from .storage import save_manifest
+    output=context.output;directory=output/'prepared/context';directory.mkdir(parents=True,exist_ok=True)
+    atomic_json(output/'context.json',context)
+    snapshot=directory/'context.json';snapshot.write_bytes((output/'context.json').read_bytes())
+    paths={'context':snapshot};controls=output/'prepared/registration_controls.json'
+    if controls.is_file():
+        copy=directory/'registration_controls.json';copy.write_bytes(controls.read_bytes());paths['controls']=copy
+    save_manifest(directory,paths,profile='immutable-prepared-context.v1')
+
+
+def verify_prepared_context(output):
+    from .storage import verify_manifest
+    output=Path(output);directory=output/'prepared/context'
+    if not (directory/'manifest.json').is_file():
+        raise ValueError('Prepared context integrity record is missing; recompute segmentation in a fresh output folder')
+    verify_manifest(directory)
+    for name,actual in [('context.json',output/'context.json'),
+                        ('registration_controls.json',output/'prepared/registration_controls.json')]:
+        snapshot=directory/name
+        if snapshot.is_file() and (not actual.is_file() or sha256(actual)!=sha256(snapshot)):
+            raise ValueError(f'Prepared context/alignment changed: {actual}')

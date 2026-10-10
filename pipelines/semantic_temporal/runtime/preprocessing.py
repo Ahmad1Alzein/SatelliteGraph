@@ -140,4 +140,6 @@ def prepare_model_inputs(context):
     paths['inputs'] = record; save_manifest(directory,paths,method='paired-harmonization.v1')
     result = replace(context,options={**context.options,'prepared_inputs':read_json(record)['tiles']})
     atomic_json(context.output/'context.json',result)
+    from .context import seal_prepared_context
+    seal_prepared_context(result)
     return result

@@ -73,6 +73,12 @@ def _features(tile, context):
 
 
 def _matched_controls(moving,reference,context,details=None):
+    if not moving.grid.crs and not reference.grid.crs:
+        from .pixel_registration import pixel_controls
+        ma,mv=read_tile(moving);ra,rv=read_tile(reference)
+        mp,rp,diagnostics=pixel_controls(ma,ra,mv,rv)
+        if details is not None:details.append({'moving_tile':moving.key,'reference_tile':reference.key,**diagnostics})
+        return _world_points(moving,mp,context,registered=False),_world_points(reference,rp,context,registered=False)
     if moving.grid.crs and reference.grid.crs:
         from src.stage5.registration import staged_tile_control_points
         try:
@@ -118,6 +124,10 @@ def prepare_comparison(context):
         physical=[bool(t.grid.physical_pixel_size) for t in tiles]
         if any(physical) and not all(physical): raise ValueError('Supply pixel size for each original image frame')
         options['coordinate_units']='metres' if all(physical) else 'pixels'
+        if len(context.years)==2 and not options.get('registration_json'):
+            options['register_images']=True
+        if not all(physical):
+            options['measurement_policy']='image_relative_pixels; area thresholds use pixel squared, distances use pixels'
     reference=context.years[-1].tiles[0]
     ref_affine=Affine(*reference.grid.affine)
     if reference.grid.crs and options.get('target_crs')!=reference.grid.crs:
@@ -132,12 +142,16 @@ def prepare_comparison(context):
     options['shared_anchor']=[ref_affine.c,ref_affine.f]
     prepared=replace(context,options=options)
     if len(context.years)==2:
+        fit=fit_registration
+        if options['coordinate_units']=='pixels':
+            from .pixel_registration import fit_pixel_registration
+            fit=fit_pixel_registration
         registration=None
         moving=[]; reference=[]; control_keys=[];feature_diagnostics=[]
         if options.get('registration_json'):
             controls=read_json(options['registration_json'])
             moving=controls['moving_xy']; reference=controls['reference_xy']
-            registration=fit_registration(controls['moving_xy'],controls['reference_xy'],
+            registration=fit(controls['moving_xy'],controls['reference_xy'],
                                           max_residual_m=float(controls.get('max_residual_m',2.0)))
         elif options.get('register_images'):
             pairs=registration_pairs(prepared)
@@ -146,7 +160,7 @@ def prepare_comparison(context):
             for a,b in pairs:
                 try: m,r=_matched_controls(by_key[a],by_key[b],prepared,feature_diagnostics)
                 except ValueError: continue
-                try:fit_registration(m,r,max_residual_m=options.get('registration_max_residual',2.0))
+                try:fit(m,r,max_residual_m=options.get('registration_max_residual',2.0))
                 except ValueError:
                     feature_diagnostics[-1]['fit_status']='rejected_insufficient_local_support'
                     continue
@@ -155,14 +169,15 @@ def prepare_comparison(context):
             if len(moving)<6: raise ValueError('Registration lacks distributed landmarks; supply --registration-json')
             m=np.array(moving);r=np.array(reference)
             _,unique=np.unique(np.round(m,6),axis=0,return_index=True)
+            unique=np.sort(unique)
             moving=m[unique];reference=r[unique]
             control_keys=[control_keys[i] for i in unique]
             tolerance=options.get('registration_max_residual',2.0)
-            registration=fit_registration(moving,reference,max_residual_m=tolerance)
+            registration=fit(moving,reference,max_residual_m=tolerance)
             registration['max_residual']=float(tolerance)
         if registration:
             if options['coordinate_units']=='pixels':
-                registration={k.replace('_m2','_pixel2').replace('_m','_pixels'):v for k,v in registration.items()}
+                registration={(k[:-3]+'_pixel2' if k.endswith('_m2') else k[:-2]+'_pixels' if k.endswith('_m') else k):v for k,v in registration.items()}
             registration['units']=options['coordinate_units']; options['registration']=registration
             matrix=np.asarray(registration['affine']).reshape(2,3)
             residuals=np.linalg.norm(np.asarray(moving)@matrix[:,:2].T+matrix[:,2]-reference,axis=1)
@@ -205,6 +220,8 @@ def prepare_comparison(context):
                 'status':'Feature registration was not performed'})
     prepared=replace(context,options=options)
     atomic_json(context.output/'context.json',prepared)
+    from .context import seal_prepared_context
+    seal_prepared_context(prepared)
     return prepared
 
 

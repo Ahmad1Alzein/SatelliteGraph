@@ -70,3 +70,38 @@ def test_same_path_gnn_checkpoint_change_recomputes_only_change(tmp_path,monkeyp
     checkpoint.write_bytes(b'second model')
     ps.run('new','new','gnn',output,resume=True)
     assert calls==['segmentation','graph','change','change']
+
+
+def test_semantic_model_fingerprint_binds_segmentation_assets_not_nested_gnn(tmp_path):
+    from src.pipeline_state import input_fingerprint
+    models=tmp_path/'models';models.mkdir()
+    segment=models/'DelineateAnythingv2.pt';segment.write_bytes(b'segmentation')
+    graph=models/'gnn'/'external';graph.mkdir(parents=True)
+    checkpoint=graph/'model.pt';checkpoint.write_bytes(b'first graph weights')
+    options={'semantic_models':str(models)}
+    original=input_fingerprint(options)
+    checkpoint.write_bytes(b'new graph weights')
+    assert input_fingerprint(options)==original
+    segment.write_bytes(b'new segmentation weights')
+    assert input_fingerprint(options)!=original
+
+
+@pytest.mark.parametrize('use_checkpoint_alias',[False,True])
+def test_nested_gnn_checkpoint_update_recomputes_only_change(tmp_path,monkeypatch,use_checkpoint_alias):
+    from pipelines.semantic_temporal.runtime.storage import atomic_json,save_manifest
+    models=tmp_path/'models';models.mkdir()
+    (models/'DelineateAnythingv2.pt').write_bytes(b'segmentation weights')
+    checkpoint=models/'gnn'/'model.pt';checkpoint.parent.mkdir();checkpoint.write_bytes(b'first model')
+    checkpoint.with_suffix('.json').write_text('{}');calls=[]
+    def execute(output,stage,method,options,state):
+        calls.append(stage);directory=output/stage;directory.mkdir(exist_ok=True)
+        report=directory/'report.json';atomic_json(report,{'stage':stage})
+        paths={'report':report};atomic_json(directory/'artifact.json',{'paths':paths});save_manifest(directory,paths)
+        return {'artifacts':[str(directory/'artifact.json')]}
+    monkeypatch.setattr(ps,'_execute_stage',execute)
+    output=tmp_path/'run'
+    ps.run('new','new','gnn',output,project_root=tmp_path,gnn_checkpoint=checkpoint,
+        **({'checkpoints':models} if use_checkpoint_alias else {'semantic_models':models}))
+    checkpoint.write_bytes(b'second model')
+    ps.run('new','new','gnn',output,resume=True)
+    assert calls==['segmentation','graph','change','change']

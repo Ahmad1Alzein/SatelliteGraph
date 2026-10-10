@@ -16,6 +16,8 @@ def relocate_run(output,state):
     old=state.get('output')
     if not old or Path(old).resolve()==output: return state
     old=Path(old);manifests=[p for p in output.rglob('manifest.json') if 'files' in read_json(p)]
+    from .context import verify_prepared_context
+    verify_prepared_context(output)
     from .storage import verify_result_manifest
     result_stages=[p.parent.name for p in (output/'results/rendering').glob('*/manifest.json')]
     for stage in result_stages:verify_result_manifest(output,stage)
@@ -57,12 +59,18 @@ def execute_stage(output,stage,method,options,state):
     # Alignment is an upstream scientific input, not a per-stage estimate.
     # Re-fitting here can move graph geometry away from segmented pixels.
     if stage=='segmentation':
-        context=prepare_comparison(build_context(options,output))
+        if (output/'prepared/context/manifest.json').is_file():
+            from .context import load_context
+            context=load_context(output,options)
+        else:context=prepare_comparison(build_context(options,output))
     else:
         from .context import load_context
         context=load_context(output,options)
     from .preprocessing import prepare_model_inputs
     context=prepare_model_inputs(context)
+    if stage=='segmentation':
+        from .context import seal_prepared_context
+        seal_prepared_context(context)
     if stage=='segmentation':
         if method=='new':
             from .segmentation import segment_tile,load_models
@@ -115,7 +123,12 @@ def execute_stage(output,stage,method,options,state):
 
 
 def _scientific_inputs(output,state,stage):
-    paths=[]
+    from .context import verify_prepared_context
+    verify_prepared_context(output)
+    paths=[output/'context.json',output/'prepared/context/manifest.json',
+           output/'prepared/context/context.json']
+    if (output/'prepared/registration_controls.json').is_file():
+        paths.extend([output/'prepared/registration_controls.json',output/'prepared/context/registration_controls.json'])
     for name in ('segmentation','graph','change'):
         for artifact in state.get('stages',{}).get(name,{}).get('result',{}).get('artifacts',[]):
             path=Path(artifact);verify_manifest(path.parent);paths.append(path)
@@ -161,7 +174,7 @@ def render_completed_stage(output,stage,state):
     try:
         validate_run(context,stage)
         print(f'Render {stage} verification images',flush=True)
-        paths=render_outputs(context,stage)
+        paths=render_outputs(context,stage,include_results=True)
         paths={k:v for k,v in paths.items() if Path(v).is_relative_to(output/'results')}
         bind_result_manifest(output,stage,paths,inputs)
         saved.update(render_status='complete',render_fingerprint=render_fingerprint(state['options'],stage))

@@ -32,3 +32,6 @@ safetensors>=0.4
 
 # Test suite.
 pytest>=8.3.0
+
+# Optional local image-pair review interface.
+streamlit>=1.51,<2

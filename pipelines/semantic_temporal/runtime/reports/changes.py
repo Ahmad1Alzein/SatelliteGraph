@@ -7,20 +7,27 @@ from PIL import Image,ImageDraw
 from shapely.geometry import shape
 from ..storage import read_json,atomic_json,save_manifest
 from ..change_contracts import TASKS,KNOWN_CLASSES,CLASS_LABELS,change_label,status_label
-from .common import (frame_bounds,fit_bounds,sample_rgb,display_rgb,paint_geometry,
+from .common import (frame_bounds,fit_bounds,sample_rgb,sample_original_rgb,display_rgb,paint_geometry,
                      compose,horizontal_panels,font,wrap_text,class_color)
 
 
 def event_crops(frame,event,size=(224,224)):
     geometry=shape(event['geometry']);left,bottom,right,top=geometry.bounds
-    padding=max((right-left)*.2,(top-bottom)*.2,abs(frame['grid'].affine[0])*4)
+    native_pixel=float(frame.get('source_pixel_size',abs(frame['grid'].affine[0])))
+    padding=max((right-left)*.2,(top-bottom)*.2,native_pixel*12)
     bounds=fit_bounds((left-padding,bottom-padding,right+padding,top+padding),size)
+    # At most 2 display pixels per original source pixel, even for tiny events.
+    cx=(left+right)/2;cy=(bottom+top)/2
+    scale=max((bounds[2]-bounds[0])/size[0],native_pixel/2)
+    bounds=(cx-scale*size[0]/2,cy-scale*size[1]/2,cx+scale*size[0]/2,cy+scale*size[1]/2)
     panels=[];flip=bool(frame['grid'].crs) or frame['grid'].affine[4]<0
     for year in frame['years']:
-        image=display_rgb(*sample_rgb(frame,year,bounds,size))
-        paint_geometry(image,geometry,bounds,'#ffdc18',alpha=25,flip_y=flip,width=2);panels.append(image)
+        image=display_rgb(*sample_original_rgb(frame,year,bounds,size))
+        paint_geometry(image,geometry,bounds,'#ffdc18',alpha=55,flip_y=flip,width=3);panels.append(image)
     return panels,{'event_id':event['event_id'],'years':list(frame['years']),
-        'before_bounds':list(bounds),'after_bounds':list(bounds),'panel_size':list(size)}
+        'before_bounds':list(bounds),'after_bounds':list(bounds),'panel_size':list(size),
+        'maximum_enlargement':native_pixel/scale,
+        'rgb_source':'native_original' if all(frame['data'][y].get('native_sources') for y in frame['years']) else 'comparison_original'}
 
 
 def _scores(result):
@@ -53,21 +60,26 @@ def _task_text(row):
 
 def _event_text(event,scores):
     title=change_label(event);descriptors=[]
+    weak=event.get('image_evidence_status',event.get('status')) in ('candidate','season_sensitive')
+    if weak and event.get('kind')=='conversion':title='Class-label difference: '+title
     if event.get('status')=='predicted':
-        title=f'{CLASS_LABELS[event["class_id"]]} | {"Added / increased" if event["kind"]=="gain" else "Removed / decreased"}'
-    for task,kinds in event.get('descriptors',{}).items():
+        title=('GNN-supported class difference: '+change_label(event) if event['kind']=='conversion' else
+            f'{CLASS_LABELS[event["class_id"]]} | {"Added / increased" if event["kind"]=="gain" else "Removed / decreased"}')
+    for task,kinds in ({} if weak else event.get('descriptors',{})).items():
         name=task.rsplit('_',1)[0];klass=next((k for k,v in KNOWN_CLASSES.items() if v==name),event.get('class_id',0))
         descriptors.extend(change_label({'kind':kind,'class_id':klass}) for kind in kinds)
     if descriptors:title+=' | '+'; '.join(dict.fromkeys(descriptors))
     badge=status_label(event.get('status','candidate'))
     texts=[title,badge,f'{event.get("area",0):,.1f} {event.get("area_units","pixels squared")}']
+    if event.get('image_evidence_status'):texts.append('Image evidence: '+status_label(event['image_evidence_status']))
     related=[]
     for task in event.get('related_tasks',[]):
         for gid in event.get('source_nodes',[])+event.get('target_nodes',[]):
             if (gid,task) in scores:related.append(scores[gid,task])
     if related:
         best=max(related,key=lambda r:r['probability']);held=best.get('probability_source')=='held_out'
-        texts.append(f'GNN change score: {best["probability"]:.3f} ({"held out" if held else "trained on this area"})')
+        provenance='held out' if held else 'saved checkpoint inference' if best.get('status')=='inference' else 'trained on this area'
+        texts.append(f'GNN change score: {best["probability"]:.3f} ({provenance})')
     else:texts.append('GNN change score: unavailable')
     if event.get('parent_event_ids'):texts.append('Part of a shape change; counted once here.')
     texts.append(event['event_id'])
@@ -79,8 +91,18 @@ def _text_block(lines,width,size=16):
 
 
 def _predicted_events(document,catalog,scores):
-    covered={(gid,task) for event in catalog.get('events',[]) for gid in event.get('source_nodes',[])+event.get('target_nodes',[]) for task in event.get('related_tasks',[])}
     nodes={n['id']:n for n in document['nodes']};events=[]
+    # A fragment of a class difference is not the whole region scored by the
+    # GNN. Suppress only an already-supported, substantially identical footprint.
+    covered=set()
+    for event in catalog.get('events',[]):
+        if event.get('status')!='reliable':continue
+        geometry=shape(event['geometry'])
+        for gid in event.get('source_nodes',[])+event.get('target_nodes',[]):
+            if gid not in nodes:continue
+            node_geometry=shape(nodes[gid]['geometry'])
+            if geometry.intersection(node_geometry).area/max(node_geometry.area,1e-9)<.8:continue
+            covered.update((gid,task) for task in event.get('related_tasks',[]))
     for (gid,task),row in sorted(scores.items()):
         if gid not in nodes or (gid,task) in covered or int(row.get('prediction',-1))!=1:continue
         node=nodes[gid];direction=task.rsplit('_',1)[1]
@@ -151,6 +173,7 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
     for i in range(0,len(cell_specs),2):row_plans.append(cell_specs[i:i+2])
     summary=[f'{len(events):,} image-evidence candidates | {len(predicted):,} additional GNN predictions',
         'Yellow highlights show the same footprint on both original images. Paired crops use the same location and scale.',
+        'Local context, native original RGB; enlargement is limited to 2x source pixels. No sharpening or invented detail.',
         'Image evidence and GNN predictions need review; these are not independently verified ground truth.',
         *[_task_text(r) for r in tasks]]
     summary_lines=_text_block(summary,width-40);header_height=60+len(summary_lines)*23
@@ -199,10 +222,37 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
             for image in thumbnails:body.paste(image,(0,offset));offset+=image.height+16
             paths[name]=directory/(name+'.png');body.save(paths[name])
     report_dir=directory/'changes';report_dir.mkdir(exist_ok=True)
+    from ..preview import grid_image,major_change,display_event
+    grid_pages=[]
+    for offset in range(0,len(events+predicted),12):
+        selected=(events+predicted)[offset:offset+12];page=offset//12+1
+        grid,_=grid_image(frame,selected,scores)
+        path=report_dir/f'change_grid_{page:03d}.png';grid.save(path)
+        paths[f'change_grid_{page:03d}']=path
+        grid_pages.append({'path':str(path.relative_to(context.output)),
+            'event_ids':[e['event_id'] for e in selected]})
+    external=(gnn_result or {}).get('evaluation',{}).get('status')=='external_annotated_subset'
+    focus_events=[display_event(e,scores,external_predictions=external) for e in events+predicted]
+    major=[e for e in focus_events if e.get('status') in ('reliable','predicted')
+        and major_change(e,document,frame.get('source_pixel_size',abs(frame['grid'].affine[0])))['include']]
+    major_pages=[]
+    for offset in range(0,max(1,len(major)),12):
+        selected=major[offset:offset+12];page=offset//12+1
+        if selected:image,_=grid_image(frame,selected,scores)
+        else:
+            image=Image.new('RGB',(960,260),'white');draw=ImageDraw.Draw(image)
+            draw.text((24,24),'No strong major changes passed the current evidence gates.',font=font(24),fill='#182331')
+            text='Raw class differences remain in the complete candidate grids. Small outline/size changes and vegetation subclass swaps are excluded from this focused view. A GNN score is a model prediction, not verified accuracy.'
+            for i,line in enumerate(wrap_text(text,900,size=18)):draw.text((24,85+i*26),line,font=font(18),fill='#182331')
+        key='major_changes' if page==1 else f'major_changes_{page:03d}'
+        path=directory/(key+'.png');image.save(path);paths[key]=path
+        major_pages.append(dict(path=str(path.relative_to(context.output)),event_ids=[e['event_id'] for e in selected]))
     paths['change_index']=report_dir/'index.json';atomic_json(paths['change_index'],{
         'years':frame['years'],'tasks':tasks,'crops':crops,'predicted_crops':predicted_crops,
         'compound_groups':compound,'structural_observations':structures,'transition_matrix':transition_record,
-        'required_pixels':required,'canvas_size':[width,height],
+        'required_pixels':required,'canvas_size':[width,height],'grid_pages':grid_pages,
+        'major_change_focus':{'shown':len(major),'pages':major_pages,
+            'policy':'Strong image evidence or GNN prediction; substantial interior; building whole-object coverage >=60%, same-class match <15%; vegetation subtype swaps excluded'},
         'images':{name:str(path.relative_to(context.output)) for name,path in paths.items() if path.suffix=='.png'}})
     save_manifest(report_dir,{'index':paths['change_index']},stage='changes')
     return paths
