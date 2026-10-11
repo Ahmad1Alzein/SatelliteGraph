@@ -115,3 +115,5 @@ Desktop.ini
 /pipelines/semantic_temporal/checkpoints/
 /pipelines/semantic_temporal/work*/
 /data/experiment_2013_2023/
+/data/legacy_building_stgnn/
+/data/external_eval/
