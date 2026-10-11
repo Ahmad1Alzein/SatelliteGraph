@@ -486,3 +486,7 @@ Run `python -m streamlit run streamlit_app.py` for two-image uploads, stage insp
 ## Legacy building spatio-temporal GNN (optional)
 
 `python -m src legacy-building-gnn run --output artifacts/legacy_building_stgnn/<run>` reproduces the original 2013–2023 building-change GNN of the frozen 7-tile study exactly (unchanged code, leave-one-tile-out retraining) and regenerates its strip change map and per-tile prediction overlays, verified pixel-for-pixel against the frozen originals. It is separate from the multi-class pipeline; its scores are agreement with rule pseudo-labels, not independent accuracy. See [Legacy building ST-GNN](docs/legacy-building-stgnn.md).
+
+## Thesis dashboard
+
+`python -m streamlit run thesis_dashboard.py` opens the MSc thesis dashboard: images → multi-class segmentation → spatial graphs → temporal matching → GNN → change detection → evaluation, with year swipe/blink comparison, object and graph exploration, the legacy GNN figures and all seven tile overlays, interactive multi-class change maps with CSV/GeoJSON export, and an evidence badge on every metric. The image-comparison tool above is included unchanged as a page. See [Thesis dashboard](docs/thesis-dashboard.md).
