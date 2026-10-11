@@ -255,7 +255,31 @@ def parser() -> argparse.ArgumentParser:
     folder_compare.add_argument("--project-root", default=".")
     folder_compare.add_argument("--no-progress", action="store_true")
     _add_pipeline_parser(commands)
+    _add_legacy_building_gnn_parser(commands)
     return root
+
+
+def _add_legacy_building_gnn_parser(commands) -> None:
+    legacy = commands.add_parser(
+        "legacy-building-gnn",
+        help="Optional frozen 2013-2023 building spatio-temporal GNN (exact legacy reproduction; separate from the multi-class pipeline)",
+    )
+    phases = legacy.add_subparsers(dest="phase", required=True)
+    bundle = phases.add_parser("bundle", help="Copy and hash-verify the frozen legacy inputs into one folder")
+    bundle.add_argument("--source", required=True, help="Experiment folder containing graphs/FROZEN_strip_tile_00000-00006_v1")
+    bundle.add_argument("--metadata", required=True, help="dataset/2023/metadata.csv of the 7-tile strip")
+    bundle.add_argument("--bundle", default="data/legacy_building_stgnn")
+    run = phases.add_parser("run", help="Retrain/predict leave-one-tile-out, render fig5 and per-tile overlays, verify")
+    run.add_argument("--bundle", default="data/legacy_building_stgnn")
+    run.add_argument("--output", required=True, help="New run folder, e.g. artifacts/legacy_building_stgnn/<name>")
+    run.add_argument("--tiles", nargs="+", default=None, help="Tiles to render overlays for (default: all seven)")
+    run.add_argument("--python", default=None, help="Interpreter with GDAL and PyTorch (default: this one)")
+    run.add_argument("--reuse-frozen-predictions", action="store_true",
+                     help="Skip training; render the figures from the frozen original predictions")
+    verify = phases.add_parser("verify", help="Compare a run folder with the frozen original outputs")
+    verify.add_argument("--output", required=True)
+    for p in (bundle, run, verify):
+        p.add_argument("--project-root", default=".")
 
 
 def _add_pipeline_parser(commands) -> None:
@@ -478,6 +502,22 @@ def main(argv: list[str] | None = None) -> None:
                                          boundary_tolerance=args.boundary_tolerance,
                                          config=args.config,project_root=project_root,
                                          show_progress=not args.no_progress)
+        elif args.stage == "legacy-building-gnn":
+            from pipelines.legacy_building_stgnn import runner as legacy
+
+            def located(value):
+                path = Path(value)
+                return path if path.is_absolute() else project_root / path
+            if args.phase == "bundle":
+                result = legacy.bundle_inputs(located(args.source), located(args.metadata), located(args.bundle))
+            elif args.phase == "run":
+                report = legacy.run(located(args.bundle), located(args.output), tiles=args.tiles, python=args.python,
+                                    reuse_frozen_predictions=args.reuse_frozen_predictions)
+                result = {key: report[key] for key in ("status", "mode", "evidence", "metrics")}
+                result["verification"] = {k: v for k, v in report["verification"].items() if k != "checks"}
+                result["output"] = str(located(args.output))
+            else:
+                result = legacy.verify(located(args.output))
         elif args.stage == "pipeline":
             from src import pipeline_select as ps
 

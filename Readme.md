@@ -482,3 +482,7 @@ config paths are resolved from that project root.
 The general pipeline now extends the existing RGNN to eight land-cover classes with sixteen gain/loss tasks, retains separate segmentation and graph PNGs, and generates registration/object-matching views and one combined paired-crop `change_report.png`. Start with [All-class change results and native commands](docs/all-class-change-results.md). The original image/folder pipeline and frozen study remain available.
 
 Run `python -m streamlit run streamlit_app.py` for two-image uploads, stage inspection, major-change filtering and local paired-crop grid downloads. Two PNGs need no metadata; folder placement accepts CSV offsets or naturally ordered left-to-right tiles. Optional annotation-supervised external GNN training and its data license are described in the same guide.
+
+## Legacy building spatio-temporal GNN (optional)
+
+`python -m src legacy-building-gnn run --output artifacts/legacy_building_stgnn/<run>` reproduces the original 2013–2023 building-change GNN of the frozen 7-tile study exactly (unchanged code, leave-one-tile-out retraining) and regenerates its strip change map and per-tile prediction overlays, verified pixel-for-pixel against the frozen originals. It is separate from the multi-class pipeline; its scores are agreement with rule pseudo-labels, not independent accuracy. See [Legacy building ST-GNN](docs/legacy-building-stgnn.md).

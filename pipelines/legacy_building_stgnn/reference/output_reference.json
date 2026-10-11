@@ -1,0 +1,206 @@
+{
+ "provenance": {
+  "gnn": "D:\\new\\DelAnyV2_Experiment\\segmentation_v2\\graphs\\FROZEN_strip_tile_00000-00006_v1\\gnn",
+  "strip_figures": "D:\\new\\DelAnyV2_Experiment\\segmentation_v2\\graphs\\FROZEN_strip_tile_00000-00006_v1\\thesis_figures",
+  "recorded": "2026-10-11"
+ },
+ "environment": {
+  "python": "3.11.16",
+  "torch": "2.11.0+cu128",
+  "numpy": "2.3.5",
+  "pandas": "3.0.6",
+  "device": "cpu",
+  "note": "environment of the 2026-10-11 bit-exact reproduction (original: same conda env)"
+ },
+ "gnn_data": {
+  "predictions.csv": "4de48be67f0f80e9b959f878f2af4ea01c4bd91df9a9d78018aff3f7075131ef",
+  "audit_agreement.csv": "02e2d875ac94df0b89392d3898bef270d570242f373b693bbf235883678aefd3",
+  "history_mlp.json": "f50e08b12fb80109a25d346128cb6e89a15664caa4a55f979d8f312adfb13dee",
+  "history_gnn_spatial.json": "bc63a4bacbd7777283ce9669a1e46590eac757ab63c6f497d41fc09d2acc7bd2",
+  "history_gnn_full.json": "70791d8b96f2a0be5b0179776f158b5a12a6fac77ae683c605f932645474a0d0"
+ },
+ "summary_without_timings": {
+  "nodes": 7020,
+  "labelled": 3851,
+  "positives": 125,
+  "positives_2023": 59,
+  "positives_2013": 66,
+  "masked": 3169,
+  "device": "cpu",
+  "models": {
+   "mlp": {
+    "ap": 0.084,
+    "roc_auc": 0.734,
+    "precision": 0.161,
+    "recall": 0.28,
+    "f1": 0.204,
+    "tp": 35,
+    "fp": 183,
+    "fn": 90,
+    "by_year": {
+     "2013": {
+      "precision": 0.048,
+      "recall": 0.03,
+      "f1": 0.037,
+      "ap": 0.06
+     },
+     "2023": {
+      "precision": 0.188,
+      "recall": 0.559,
+      "f1": 0.281,
+      "ap": 0.114
+     }
+    }
+   },
+   "gnn_spatial": {
+    "ap": 0.1,
+    "roc_auc": 0.71,
+    "precision": 0.148,
+    "recall": 0.24,
+    "f1": 0.183,
+    "tp": 30,
+    "fp": 173,
+    "fn": 95,
+    "by_year": {
+     "2013": {
+      "precision": 0.125,
+      "recall": 0.197,
+      "f1": 0.153,
+      "ap": 0.101
+     },
+     "2023": {
+      "precision": 0.172,
+      "recall": 0.288,
+      "f1": 0.215,
+      "ap": 0.117
+     }
+    }
+   },
+   "gnn_full": {
+    "ap": 0.53,
+    "roc_auc": 0.906,
+    "precision": 0.507,
+    "recall": 0.6,
+    "f1": 0.549,
+    "tp": 75,
+    "fp": 73,
+    "fn": 50,
+    "by_year": {
+     "2013": {
+      "precision": 0.346,
+      "recall": 0.424,
+      "f1": 0.381,
+      "ap": 0.266
+     },
+     "2023": {
+      "precision": 0.701,
+      "recall": 0.797,
+      "f1": 0.746,
+      "ap": 0.787
+     }
+    }
+   }
+  },
+  "audit_agreement": {
+   "real": {
+    "n": 43,
+    "detected_by_gnn": 33,
+    "median_prob": 0.998
+   },
+   "unclear": {
+    "n": 2,
+    "detected_by_gnn": 0,
+    "median_prob": 0.08
+   },
+   "questionable": {
+    "n": 13,
+    "detected_by_gnn": 10,
+    "median_prob": 0.996
+   }
+  }
+ },
+ "strip_figures": {
+  "fig5a_gnn_architecture.png": "75c5b438ee75313baddd551bc296c8c7ba33829d3d6e655ff382a5fc774b61be",
+  "fig5b_gnn_results.png": "240437a8964707173b924196212e6ea031478c59b1c770b07576fbaf3c3d5cc9",
+  "fig5c_gnn_change_map.png": "d3eb858143ff089821221df46c47d805aa184b1dce6189628a0049e312374433"
+ },
+ "tile_figures": {
+  "tile_00000": {
+   "reference": "first reproduction 2026-10-11 (no frozen original exists)",
+   "source": "D:\\new\\finalProject\\SatelliteGraph\\artifacts\\building_gnn_recovery\\repro\\gnn_viz_tile_00000",
+   "files": {
+    "1_predictions_overlay.png": "65bd843a4d3c1b0ce8150bb5bc80c4af8e2876221e78a6f62fb503e55f3edd8d",
+    "2_probability_map.png": "ae6d1f59ca7e5bce8d87c1e88eb4acfd8644da938c88cc344377f96eb94f61b4",
+    "3_gallery_2013.png": "c5b1ad3d8c96da52ee9f688d079b66f87787bff235b510b5897457c53c4eada7",
+    "3_gallery_2023.png": "26e7937d71745f82566c60dad028197a4da4fc3e9b38938f045cb9992d4d6022",
+    "predicted_nodes.csv": "36a44192bc9e5c2ba92168e4eb48527d44e86f9cdaa1c4edb49024d0da68271a"
+   }
+  },
+  "tile_00001": {
+   "reference": "first reproduction 2026-10-11 (no frozen original exists)",
+   "source": "D:\\new\\finalProject\\SatelliteGraph\\artifacts\\building_gnn_recovery\\repro\\gnn_viz_tile_00001",
+   "files": {
+    "1_predictions_overlay.png": "325ea79ce357e97eef95ebe775eab513f714bb76ba8d5f46546538bc3f5eb121",
+    "2_probability_map.png": "5587e53e60253f90868103e2ebf073110d859b1fab75484d210afafe0d2f14ce",
+    "3_gallery_2013.png": "9b190823a1a0314c568cc454e07ee91c2de79d4130281dfee3f831889ab53ac8",
+    "3_gallery_2023.png": "d4d25274137aa25528df8019825fcfadcb66d463bef983d563535a83737c1d29",
+    "predicted_nodes.csv": "72fed6e7c8274cf776b03ee37eed8b1fd1178f543f3e60a0c57bfc248e165d72"
+   }
+  },
+  "tile_00002": {
+   "reference": "frozen original 2026-10-05",
+   "source": "D:\\new\\DelAnyV2_Experiment\\run_dataset_2013_2023\\gnn_viz_tile_00002",
+   "files": {
+    "1_predictions_overlay.png": "f1b3d58d0f11f3faf797e43bd614c17cafb1e7578718effccfbc416a79ae8ce0",
+    "2_probability_map.png": "b5f17d01b84f787a03b8f35ee42c2a3a07ec22a9635d61e1941c592f58f014bb",
+    "3_gallery_2013.png": "910060e8a14a657feba27ad7e151676e4556ca8a80180fa3fa7baa3ff9b820e0",
+    "3_gallery_2023.png": "61eed6492a17b0a45ec34bbdea88c2b6f8dcac3b73f35218d5e9f54b971f1b2c",
+    "predicted_nodes.csv": "420f4c9a5a14a89e720ce9f783e2e0b0fa9f3e1efc7e557bbb3718a527e85082"
+   }
+  },
+  "tile_00003": {
+   "reference": "first reproduction 2026-10-11 (no frozen original exists)",
+   "source": "D:\\new\\finalProject\\SatelliteGraph\\artifacts\\building_gnn_recovery\\repro\\gnn_viz_tile_00003",
+   "files": {
+    "1_predictions_overlay.png": "56ef644dbf2530fb46e266f1b96bc064223e4edad87f3c731843d87509395522",
+    "2_probability_map.png": "c374f80ef5c2a6fa3867bff954907048b97b48e5966878a75b01ce5398cf08e4",
+    "3_gallery_2013.png": "044aabb0dc1cbefaecb9d8491af14475c5a433661deac4ec679c6e83dd6b27a0",
+    "3_gallery_2023.png": "dc1142d4c618aedfb5e1c1a6d59b49eaa86f4df7eda848fefb9a8a1851f91fc0",
+    "predicted_nodes.csv": "ec8401ba47ae799bd39d094aa82d6a860bde20122c4114baa4fb058fdd66f7b5"
+   }
+  },
+  "tile_00004": {
+   "reference": "first reproduction 2026-10-11 (no frozen original exists)",
+   "source": "D:\\new\\finalProject\\SatelliteGraph\\artifacts\\building_gnn_recovery\\repro\\gnn_viz_tile_00004",
+   "files": {
+    "1_predictions_overlay.png": "59f9405e0e05cf5ea15c7b7b5c717992c7ea3e0e8c2bb005a6070956b513c311",
+    "2_probability_map.png": "120c42588e45d1d6406e9732aba6aec88904d15f1729bd78831dfde28f0da435",
+    "3_gallery_2013.png": "3026e42869c22453dabb2d2f06bda7b860caee699d6e60fd17f6ce3e65f3d34a",
+    "3_gallery_2023.png": "06662251e895f3f07ae5f6372e162572a1f4a778bb34415e8907017e02d9b540",
+    "predicted_nodes.csv": "e1eef655ea8ade7b4b314b0396ffab041dab0c5a7b500c9470564cacfe8123e2"
+   }
+  },
+  "tile_00005": {
+   "reference": "first reproduction 2026-10-11 (no frozen original exists)",
+   "source": "D:\\new\\finalProject\\SatelliteGraph\\artifacts\\building_gnn_recovery\\repro\\gnn_viz_tile_00005",
+   "files": {
+    "1_predictions_overlay.png": "0b2b9a3f28ccc558397673d2d761a08c2abf82c54fa00030f81ddd285c32ca0e",
+    "2_probability_map.png": "1321bf71ee9d8cb3a70d601f711ac5c5ff7a81bf5730404a237a19ba66ae1838",
+    "3_gallery_2013.png": "06e649f2a2dc70869323e846539ece2ff75a980ae78c0c283b5adab67c253c63",
+    "3_gallery_2023.png": "69c045a1153f8bd5a98972f1d92ced56a6ec106f0e0fdf59f0b1fa9b11e90016",
+    "predicted_nodes.csv": "b557dcea7537434f08e03ee42f622cfeb45a012cd2e610927769d6a25dc641f4"
+   }
+  },
+  "tile_00006": {
+   "reference": "first reproduction 2026-10-11 (no frozen original exists)",
+   "source": "D:\\new\\finalProject\\SatelliteGraph\\artifacts\\building_gnn_recovery\\repro\\gnn_viz_tile_00006",
+   "files": {
+    "1_predictions_overlay.png": "9a1b2fc474102e32ff36420eb984baf8af23f7c1d274a6cebf199f2399cf348c",
+    "2_probability_map.png": "ca5d0bd96283d761f9e2ebb5f4499e7a8a2671f0c94e1ab9cb3f501579db3c74",
+    "3_gallery_2013.png": "24ec48954509b0d2797c5c65ed60131e1858974565d77a5e147265a7ae4b9968",
+    "3_gallery_2023.png": "a14a8b7a77e930730f90217ef162db1c9137a624a8be7e0556cef98021465642",
+    "predicted_nodes.csv": "04275cf664caec5ab9221869aeb6cfc35887f3c01cfa917423da8fe57fe92c55"
+   }
+  }
+ }
+}

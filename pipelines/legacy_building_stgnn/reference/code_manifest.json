@@ -1,0 +1,22 @@
+{
+ "provenance": {
+  "code": "D:\\new\\DelAnyV2_Experiment\\segmentation_v2\\graphs\\FROZEN_strip_tile_00000-00006_v1\\code",
+  "tile_visualisation": "D:\\new\\DelAnyV2_Experiment\\run_dataset_2013_2023\\validation\\gnn_predictions_tile_viz.py",
+  "release_created": "2026-10-04 22:50:59",
+  "note": "byte-identical copies; never edit"
+ },
+ "files": {
+  "build_graph.py": "65d818826379e7fd22a36b1c7ad8562015d7c231cc42a06e26e104d637ff6bee",
+  "build_mosaic.py": "24dd0421f6d173b06eeb17951f4ce3ea985fcd7426ac51e9d6d598de28bd3e58",
+  "final_strip_qa.py": "cac825c16bde3ad87b19e531412869939e3d768887b015b907deeacf04e6a84e",
+  "freeze_strip.py": "e5a787a9a1b62e32cb54edd4480e078756ce01ad1030bff2d197736851817484",
+  "gnn_change.py": "19cff8d01ab5dc2c5c5692f90fdb986784c9a0d26717ead72c6a4d821e59c5d7",
+  "refine_merge.py": "bbce28cb5be66442d719bb78d9fddc385ac3d544c90ef7ea9fb27a1d12d3f018",
+  "segment_final.py": "d0bb37999fb8ada13b90d16d71517ecf921b6a066eae2c44ba7ece7de94887d3",
+  "segment_v2.py": "33f511b38597d3f9388ddec6870308a98eeccbc27dab2faf18e78eb9dc8a2881",
+  "semantic_ms.py": "3d35ec37a972a32a28a1e9c28d6da94d5f5b8ff016f3cb444db61051d8e020fd",
+  "temporal_layer.py": "4d08128649765da7b38ef93d70df617cf4be865ec5855f14e9eaf389556f521b",
+  "thesis_figures.py": "b53e7d4d26038d6245a354060a382d2388ae0f6e927ba22efbd31314b3139455",
+  "validation/gnn_predictions_tile_viz.py": "6abe4c2ea759b675acb91e8257b6354cda7b28f74a89bf0f2be3c5a7aa410e47"
+ }
+}

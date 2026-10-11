@@ -1,3 +1,4 @@
 * text=auto eol=lf
 # Verified, byte-exact reproduction package: never normalize line endings
 pipelines/semantic_temporal/** -text
+pipelines/legacy_building_stgnn/original/** -text
