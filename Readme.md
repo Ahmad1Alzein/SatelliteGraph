@@ -1,7 +1,37 @@
 # SatelliteGraph
 
-SatelliteGraph turns satellite imagery into semantic instance segmentations
-and tile-local adjacency graphs. The current workflow is:
+SatelliteGraph compares two dates of satellite imagery through selectable
+segmentation, spatial graph and change-detection methods. Start the thesis dashboard:
+
+```powershell
+& ..\.venv\Scripts\python.exe -m streamlit run thesis_dashboard.py
+```
+
+Open **Run pipelines & results**. Choose each stage independently:
+
+| Stage | Old method | New / retained method |
+|---|---|---|
+| Segmentation | SAM 2.1 + OpenEarthMap FasterSeg | SegFormer + Delineate Anything v2 |
+| Spatial graph | Adjacency only | Adjacency plus nearby relations |
+| Change detection | Stage 5 polygon change rules | Original thesis building ST-GNN |
+
+All eight combinations use the same segmentation, graph, matching and change
+viewer. Upload two images or enter image paths/tile folders. Outputs are separate
+under `artifacts/image_comparisons/`. The pipeline workspace is part of the thesis
+dashboard; there is one Streamlit entry point. See [pipeline options](docs/pipeline-options.md)
+for installation, placement requirements, native CLI commands and resume behavior.
+
+The retained GNN is `pipelines/legacy_building_stgnn/original/gnn_change.py`, class
+`RGNN`, integrated by contributor Roaa Elmir in commit `a9f9df7`. It is project
+model code, with no downloaded pretrained weights or saved weights checkpoint.
+It predicts later new/extended buildings and earlier land built over. The previous
+enhanced all-class GNN, its training controls and experimental checkpoint were removed.
+New-input fits are labelled training only. The frozen thesis source, predictions,
+metrics and figures stay separate and unchanged; see [the retained GNN](docs/legacy-building-stgnn.md).
+
+## Original Stage 1–5 command reference
+
+The original image/folder commands remain available. Their workflow is:
 
 1. Stage 1 divides a source raster into overlapping image tiles.
 2. Stage 2 creates one complete semantic instance segmentation for a tile.
@@ -477,11 +507,11 @@ has enough reliable correspondences using the saved PNGs and georeference; the
 original source GeoTIFFs need not still be present. With `--project-root`, relative
 config paths are resolved from that project root.
 
-## All-class native change pipeline
+## Selectable native change pipeline
 
-The general pipeline now extends the existing RGNN to eight land-cover classes with sixteen gain/loss tasks, retains separate segmentation and graph PNGs, and generates registration/object-matching views and one combined paired-crop `change_report.png`. Start with [All-class change results and native commands](docs/all-class-change-results.md). The original image/folder pipeline and frozen study remain available.
+The general pipeline supports all eight combinations of old/new segmentation, old/new spatial graphs, and old Stage 5 change rules/original thesis building ST-GNN. All combinations retain stage PNGs, registration/object matching and one paired-crop `change_report.png`. See [pipeline options and native commands](docs/pipeline-options.md). The enhanced sixteen-head experimental GNN and its external training commands were removed; earlier saved results remain historical records.
 
-Run `python -m streamlit run streamlit_app.py` for two-image uploads, stage inspection, major-change filtering and local paired-crop grid downloads. Two PNGs need no metadata; folder placement accepts CSV offsets or naturally ordered left-to-right tiles. Optional annotation-supervised external GNN training and its data license are described in the same guide.
+Run `python -m streamlit run thesis_dashboard.py` and open **Run pipelines & results** to choose methods, upload images or enter local paths/folders, inspect stages and download crop grids. Two PNGs need no placement metadata; tile folders use their placement metadata. New-input GNN fits are training only and remain separate from the frozen thesis evaluation.
 
 ## Legacy building spatio-temporal GNN (optional)
 
@@ -489,4 +519,44 @@ Run `python -m streamlit run streamlit_app.py` for two-image uploads, stage insp
 
 ## Thesis dashboard
 
-`python -m streamlit run thesis_dashboard.py` opens the MSc thesis dashboard: images → multi-class segmentation → spatial graphs → temporal matching → GNN → change detection → evaluation, with year swipe/blink comparison, object and graph exploration, the legacy GNN figures and all seven tile overlays, interactive multi-class change maps with CSV/GeoJSON export, and an evidence badge on every metric. The image-comparison tool above is included unchanged as a page. See [Thesis dashboard](docs/thesis-dashboard.md).
+`python -m streamlit run thesis_dashboard.py` opens the MSc thesis dashboard with the preserved study figures, all seven tile overlays and the selectable pipeline workspace. All eight pipeline combinations share the current visualization. See [Thesis dashboard](docs/thesis-dashboard.md).
+
+## Private thesis data package and checksums
+
+Extract the private thesis data package into the repository root, merging its folders.
+The licensed 2013/2023 source imagery is private and must not be published.
+
+| Folder | Content |
+|---|---|
+| `data/legacy_building_stgnn/` | 53 frozen study input files: strip imagery, segmentations, graphs, pseudo-labels and original GNN output reference |
+| `data/external_eval/` | Partial OpenStreetMap 2023 building/reference comparisons for tiles 1, 3 and 6 |
+| `artifacts/legacy_building_stgnn/full_run_2026-10-11/` | Verified original GNN reproduction: 44 checked predictions, metrics and figure outputs |
+| `artifacts/shouf3/` | Earlier saved pipeline runs; experimental GNN runs are historical records |
+
+`SHA256SUMS.txt` is kept to verify this private data package. It covers imagery,
+graphs, references and preserved outputs that are not committed to Git. It is not
+needed to launch the dashboard, and is not a checksum list for newly created runs.
+The old separate data README has been merged here and removed from the manifest.
+Verify the package from the repository root:
+
+```powershell
+python -c "import hashlib,pathlib; rows=[l.split('  ',1) for l in pathlib.Path('SHA256SUMS.txt').read_text().splitlines() if l.strip()]; bad=[p for h,p in rows if not pathlib.Path(p).is_file() or hashlib.file_digest(open(p,'rb'),'sha256').hexdigest()!=h]; print('OK' if not bad else bad); raise SystemExit(bool(bad))"
+```
+
+The archive omits segmentation model checkpoints and complete rendered general-run
+folders. Create a complete run with the dashboard or native pipeline commands to
+inspect its current stage images and local crops. Building change metrics measure
+agreement with rule pseudo-labels; independent change accuracy remains unmeasured.
+
+## Frozen reproduction packages
+
+`pipelines/legacy_building_stgnn/original/` contains byte-verified frozen scientific
+code; `reference/` records source/input/output hashes, and `runner.py` stages a new
+reproduction without overwriting any existing run. Current-input adapters live
+outside `original/`. See [original building ST-GNN](docs/legacy-building-stgnn.md).
+
+The complete historical segmentation-to-GNN experiment is documented in
+[frozen Semantic Temporal reproduction](docs/frozen-semantic-experiment.md).
+That reproduction needs its recorded environment, including GDAL; general selectable
+pipelines do not require GDAL. Third-party READMEs remain with their vendored libraries
+as upstream documentation. This is the sole project README.

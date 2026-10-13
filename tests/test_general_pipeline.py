@@ -18,7 +18,11 @@ def input_pair(tmp_path,monkeypatch):
     config['stage2']['filtering']['minimum_area']=1
     config['stage2']['fusion']['minimum_sam_component_area']=1
     config['stage2']['fusion']['minimum_component_area']={name:1 for name in ['bareland','rangeland','developed space','road','tree','water','agriculture land','buildings','unknown']}
-    return {'folders':[str(p) for p in folders],'project_root':str(Path(__file__).resolve().parents[1]),'old_config':config,'gnn_epochs':2,'gnn_hidden':8,'inference_window':64,'inference_overlap':16,'tta':False}
+    # These tests inject model predictions; avoid repeatedly hashing unrelated
+    # gigabytes of real weights. Real-backend smoke tests cover those assets.
+    return {'folders':[str(p) for p in folders],'project_root':str(Path(__file__).resolve().parents[1]),
+            'semantic_models':str(tmp_path/'fixture_models'),'old_config':config,
+            'gnn_epochs':2,'gnn_hidden':8,'inference_window':64,'inference_overlap':16,'tta':False}
 
 
 @pytest.mark.parametrize('segmentation',['old','new'])
@@ -36,6 +40,27 @@ def test_all_eight_combinations_produce_real_artifacts(tmp_path,input_pair,segme
     assert list((output/'results/segmentation').rglob('*.png'))
     assert list((output/'results/graphs').rglob('*.png'))
     assert (output/'results/change_report.png').is_file()
+    if change=='gnn':
+        assert state['stages']['change']['result']['model_source']=='pipelines/legacy_building_stgnn/original/gnn_change.py'
+    else:
+        assert json.loads((output/'temporal/classical_changes.json').read_text())['engine']=='stage5_classical'
+    from streamlit.testing.v1 import AppTest
+    app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'thesis_dashboard.py'))
+    from streamlit.util import calc_md5
+    app._page_hash=calc_md5('image_comparison')
+    app.session_state['selected_run']=str(output)
+    app.run(timeout=90)
+    assert not app.exception,[e.value for e in app.exception]
+    assert len(app.tabs)==5
+    if change=='gnn' and segmentation=='new' and graph=='new':
+        # Historical experimental runs have no original model_source marker.
+        # Opening one must not relabel its saved scores as the retained model.
+        state['stages']['change']['result'].pop('model_source')
+        (output/'run.json').write_text(json.dumps(state))
+        app.run(timeout=90)
+        assert not app.exception
+        assert any('retired experimental RGNN' in item.value for item in app.warning)
+        assert any(item.value=='Historical experimental RGNN (retired)' for item in app.subheader)
 
 
 def test_separate_stages_inherit_single_images_and_relocated_output(tmp_path,input_pair):

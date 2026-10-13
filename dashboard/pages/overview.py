@@ -76,7 +76,8 @@ st.dataframe(pd.DataFrame([
     ["2 · Multi-class segmentation", "8-class object maps, class areas, object explorer with attributes", "frozen study bundle"],
     ["3 · Spatial graphs", "interactive region adjacency graphs (touches / near) per tile and year", "frozen study bundle"],
     ["4 · Temporal matching", "2013 ↔ 2023 object links, split / merge / n:m components, per-object lineage", "frozen study bundle"],
-    ["5 · Spatio-temporal GNN", "legacy building ST-GNN (verified reproduction) and the multi-class RGNN head status", "legacy run + pipeline runs"],
-    ["6 · Change detection", "legacy strip change map, 7 tile overlays, multi-class change events with filters and export", "legacy run + pipeline runs"],
+    ["5 · Spatio-temporal GNN", "original building ST-GNN: preserved study and separate new-input fits", "legacy run + pipeline runs"],
+    ["6 · Change detection", "preserved strip/tile change maps and selectable pipeline reports with export", "legacy run + pipeline runs"],
     ["7 · Evaluation", "every metric grouped by evidence type, including what is still unmeasured", "all of the above"],
 ], columns=["Page", "Content", "Source"]), hide_index=True, width="stretch")
+st.page_link('dashboard/pages/pipelines.py',label='Run pipelines & results · choose all three methods independently')

@@ -190,7 +190,10 @@ def detect_change_events(earlier, later, polygons_a, polygons_b, policy, *, show
             continue
         # All measurements refer to common ground; never interpret tile clips
         # as physical shrinkage. Full areas retained separately for auditing.
-        a,b = before.intersection(common),after.intersection(common)
+        # Area events exclude boundary-only contacts. Clipping a valid polygon
+        # can produce polygon/line collections that GEOS cannot subtract from
+        # an empty collection for an appearance/disappearance group.
+        a,b = _area_intersection(before,common),_area_intersection(after,common)
         gain,loss = b.difference(a),a.difference(b)
         change = gain.union(loss)
         support_geometry = change if change.area > 1e-9 else a.union(b)

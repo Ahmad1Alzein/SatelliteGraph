@@ -38,6 +38,19 @@ def test_many_small_building_matches_still_mean_the_building_persisted():
     assert not major_change(event,doc,1)['include']
 
 
+def test_original_built_over_predictions_are_visible_in_major_change_focus():
+    from pipelines.semantic_temporal.runtime.reports.changes import _predicted_events
+    from pipelines.semantic_temporal.runtime.preview import event_rows,filter_rows
+    land=dict(id='earlier-land',year=2013,class_id=3,confidence=.9,
+        area=900,geometry=mapping(box(0,0,30,30)))
+    document={'nodes':[land],'temporal_edges':[]}
+    scores={('earlier-land','built_over'):dict(probability=.9,prediction=1,status='training_only')}
+    events=_predicted_events(document,{'events':[]},scores)
+    rows=event_rows(events,document,scores,native_pixel=1.)
+    assert rows[0]['gnn_score']==.9
+    assert len(filter_rows(rows,major_only=True))==1
+
+
 def test_report_always_provides_major_change_summary_png(tmp_path):
     from tests.test_change_report_pngs import report_fixture
     from pipelines.semantic_temporal.runtime.reports.changes import render_change_results

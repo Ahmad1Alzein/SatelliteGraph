@@ -106,12 +106,12 @@ def execute_stage(output,stage,method,options,state):
         print('Build temporal correspondences',flush=True)
         temporal=build_temporal_graph(tuple(graphs),context)
         print('Measure all-class image changes and training targets',flush=True)
-        classical=detect_classical(temporal,context)
+        classical=detect_classical(temporal,context,engine='stage5_classical' if method=='classical' else 'thesis_gnn')
         if method=='gnn':
             from .gnn import run_gnn
-            print('Run existing RGNN with supported class gain/loss heads',flush=True)
+            print('Run original thesis building ST-GNN (new-input experiment)',flush=True)
             info=run_gnn(temporal,context,checkpoint=options.get('gnn_checkpoint'))
-        else: info={'status':'complete','report':str(temporal.directory/'classical_changes.json'),'years':classical['years']}
+        else: info={'status':'complete','method':'classical','report':str(temporal.directory/'classical_changes.json'),'years':classical['years']}
         info['artifacts']=[str(temporal.directory/'artifact.json')]
         if method=='gnn': info['artifacts'].append(str(temporal.directory/'gnn/artifact.json'))
     print(f'Validate {stage} scientific artifacts',flush=True)

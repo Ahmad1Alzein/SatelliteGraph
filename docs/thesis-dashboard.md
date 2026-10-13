@@ -5,9 +5,25 @@ python -m pip install -r requirements.txt          # streamlit and plotly
 python -m streamlit run thesis_dashboard.py
 ```
 
-The dashboard is a multipage Streamlit app in front of the existing results. It reads the files and recomputes no
-results. The original image-comparison tool (`streamlit_app.py`) is unchanged: it is mounted as the page
-*Run a new image pair* and can still be run on its own.
+The dashboard preserves the original thesis result pages and includes **Run pipelines & results**
+(`dashboard/pages/pipelines.py`). Launch `thesis_dashboard.py` and choose each stage independently:
+
+- Segmentation: SAM 2.1 + OpenEarthMap (old), or SegFormer + Delineate Anything (new).
+- Spatial graph: adjacency only (old), or adjacency plus nearby relations (new).
+- Change: original Stage 5 rules (old), or the original thesis building ST-GNN.
+
+All eight combinations share the segmentation, graph, matching and paired-crop result viewer.
+Upload two images, enter local image paths, or supply two tile folders with placement metadata.
+Set chronological years and the processing device; known physical pixel size and preprocessing
+options are optional. Each launch creates a new run under `artifacts/image_comparisons/`.
+Completed runs are listed on Change detection and Spatio-temporal GNN, and can be opened in
+the workspace by folder path. Rule-based runs need no GNN artifact, and empty results are supported.
+
+The retained model is project code in `pipelines/legacy_building_stgnn/original/gnn_change.py`
+(class `RGNN`), integrated by contributor Roaa Elmir. It is not downloaded pretrained weights.
+It learns binary building/built-over targets; it does not save a weights checkpoint. The former
+experimental multi-class GNN and its training controls were removed. New-input fitting does not
+replace or inherit the evaluation of the preserved seven-tile experiment.
 
 ## Pages
 | Page | Content | Source |
@@ -17,10 +33,10 @@ results. The original image-comparison tool (`streamlit_app.py`) is unchanged: i
 | 2 · Multi-class segmentation | 8-class object overlay (opacity, class filter, boundaries); class areas per year; object explorer (select a row to outline the object); CSV export | bundle |
 | 3 · Spatial graphs | interactive adjacency graph over the image (touches / near; hover attributes); degree and class-pair statistics; CSV export | bundle |
 | 4 · Temporal matching | link counts, match-type components, class-to-class shared area; object lineage view (2013 object → linked 2023 objects); CSV export | bundle |
-| 5 · Spatio-temporal GNN | legacy building ST-GNN: verification status, metrics and ablation, audit agreement, frozen fig5a / fig5b; multi-class RGNN head status per run | legacy run, pipeline runs |
-| 6 · Change detection | fig5c strip map; the 7 per-tile overlays (overlay, probability map, galleries, predicted nodes); multi-class change events as an interactive map with filters, charts, CSV and GeoJSON export | legacy run, pipeline runs |
+| 5 · Spatio-temporal GNN | original building ST-GNN: preserved verification, metrics, audit and figures; separate new-input run status | legacy run, pipeline runs |
+| 6 · Change detection | preserved strip and tile overlays; selectable pipeline reports and CSV/PNG export; link to local crop viewer | legacy run, pipeline runs |
 | 7 · Evaluation | evidence hierarchy; per-tile legacy GNN agreement; visual audit; building instances vs OSM 2023; what is still unmeasured | legacy run, OSM comparison |
-| Run a new image pair | the original tool (upload, run pipeline, review crops, reviewed labels) | `streamlit_app.py` |
+| Run pipelines & results | independent stage choices; upload/path/folder inputs; common crop and stage viewer | `dashboard/pages/pipelines.py` |
 | Reproduce & data | data sources found, commands, git commit | — |
 
 ## Evidence badges
@@ -37,6 +53,13 @@ Every metric carries one badge:
 
 Pseudo-label scores are never presented as accuracy.
 
+Local change crops display the saved **GNN change score** when available, alongside
+the evidence status. Higher values indicate greater model support for change;
+strong image evidence, weak candidates and seasonal differences retain separate
+labels. Unscored events show `unavailable`. Segmentation confidence is not shown
+or used as a filter in the crop browser. New-input GNN fits are trained on the
+current area and do not provide independently tested confidence or accuracy.
+
 ## Data
 Paths can be overridden with environment variables:
 
@@ -44,9 +67,9 @@ Paths can be overridden with environment variables:
 |---|---|---|
 | `SG_LEGACY_BUNDLE` | `data/legacy_building_stgnn` | frozen study: strip imagery, segmentations, graphs, temporal links (`python -m src legacy-building-gnn bundle …`) |
 | `SG_LEGACY_RUN` | newest `artifacts/legacy_building_stgnn/*/report.json` | verified legacy GNN run (`… legacy-building-gnn run …`) |
-| `SG_RUNS` | `artifacts/shouf3` | multi-class pipeline runs (`python -m src pipeline run …`) |
+| `SG_RUNS` | `artifacts/shouf3` plus `artifacts/image_comparisons` | pipeline runs; an explicit override scans only that folder |
 | `SG_EXTERNAL_EVAL` | `data/external_eval`, falling back to `D:\new\OriginalPipeline_Improved\improve\out\compare_repo` | optional OSM building comparison tables |
-| `SATELLITEGRAPH_RUN` | — | run folder preselected in the original tool |
+| `SATELLITEGRAPH_RUN` | — | run folder preselected in the pipeline workspace |
 
 Missing sources produce a notice on the affected page, not an error.
 

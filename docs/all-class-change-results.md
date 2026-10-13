@@ -1,10 +1,16 @@
 # All-class change results
 
+> Historical experimental documentation. The enhanced all-class RGNN and its
+> checkpoint/training commands below were retired on 2026-10-12. They are retained
+> here to document earlier saved results, and are no longer runnable. Current
+> choices and commands are in [pipeline options](pipeline-options.md); the
+> dashboard now uses the [original thesis building ST-GNN](legacy-building-stgnn.md).
+
 The general pipeline is `pipelines/semantic_temporal/runtime/`. It extends the existing relational GNN encoder with separate gain and loss heads for Buildings, Roads, Trees, Grass/shrubs, Cropland, Bare ground, Paved areas and Water. The original `src` image/folder stages and the frozen `run_experiment.py` remain separate and available.
 
 ## What to open
 
-For the local upload-and-review page, run `python -m streamlit run streamlit_app.py` from this checkout. Upload a before PNG and an after PNG, then click **Run full comparison**. The page runs the native pipeline, shows progress, and retains segmentation, each graph, matching, scores and downloadable paired-crop grids. **Focus on major changes** is enabled by default; weak/seasonal differences are opt-in.
+For the current upload-and-review page, run `python -m streamlit run thesis_dashboard.py` from this checkout and open **Run pipelines & results**. Upload a before PNG and an after PNG, then click **Run full comparison**. The page runs the native pipeline, shows progress, and retains segmentation, each graph, matching, scores and downloadable paired-crop grids. **Focus on major changes** is enabled by default; weak/seasonal differences are opt-in.
 
 To run the entire method on one pair with no additional data:
 
@@ -16,7 +22,7 @@ $env:MKL_NUM_THREADS = '4'
   --images 'path/to/before.png' 'path/to/after.png' `
   --output artifacts/my_pair --device cpu --max-report-pixels 256000000 `
   --gnn-checkpoint checkpoints/semantic_temporal/gnn/lsscd_major_pixels/model.pt
-& $python -m streamlit run streamlit_app.py
+& $python -m streamlit run thesis_dashboard.py
 ```
 
 Automatic registration finds distributed image landmarks and the common visible region. Images can differ in dimensions and resolution; the pixel affine gate supports scale factors 0.25 to 4. Failed/weak registration stops comparison. PNG-only measurements are pixels and pixels squared, never invented metres. This model path expects optical RGB; actual radar/SAR needs a different validated feature/segmentation model.
@@ -241,7 +247,7 @@ The current installed checkpoint is `checkpoints/semantic_temporal/gnn/lsscd_maj
   --output artifacts/my_graph_comparison --device cpu --max-report-pixels 256000000 `
   --gnn-checkpoint checkpoints/semantic_temporal/gnn/lsscd_major_pixels/model.pt
 
-& $python -m streamlit run streamlit_app.py
+& $python -m streamlit run thesis_dashboard.py
 ```
 
 No additional checkpoint is loaded from source experiment directories during inference. The training command above reproduces the enhanced full-graph variant with the new negative policy; it does not itself execute the four-model comparison or select task experts. All raw candidates remain available separately from focused model-prediction grids. The source imagery's blur, occlusion, seasons and failed segmentations remain material limits.

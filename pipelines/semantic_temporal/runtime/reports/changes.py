@@ -36,26 +36,50 @@ def _scores(result):
         path=(result or {}).get(name)
         if path and Path(path).is_file():
             for row in pd.read_csv(path).to_dict('records'):
-                if row.get('task') in TASKS and pd.notna(row.get('probability')):
+                if row.get('task') in (*TASKS,'built_over') and pd.notna(row.get('probability')):
                     rows[row['gid'],row['task']]=row
     return rows
 
 
 def _task_rows(result,scores):
     heads=(result or {}).get('head_status',{});rows=[]
-    for task in TASKS:
+    default_status='not_selected' if (result or {}).get('method')=='classical' else 'insufficient_data'
+    tasks=('building_gain','built_over') if (result or {}).get('model_source') else TASKS
+    for task in tasks:
         head=heads.get(task,{});values=[float(r['probability']) for (gid,t),r in scores.items() if t==task]
         rows.append({'task':task,'available':bool(head.get('available',False)),
-            'status':head.get('status','insufficient_data'),'score':max(values) if values else None,
+            'status':head.get('status',default_status),'score':max(values) if values else None,
             'positive_targets':head.get('positive_targets',head.get('positive',0)),
             'negative_targets':head.get('negative_targets',head.get('negative',0))})
     return rows
 
 
 def _task_text(row):
+    if row['task']=='built_over':
+        state=status_label(row['status']) if row['available'] else 'Unavailable: not enough training examples'
+        return 'Earlier land built over: '+state
     name,direction=row['task'].rsplit('_',1);klass=next(k for k,v in KNOWN_CLASSES.items() if v==name)
-    state=status_label(row['status']) if row['available'] else 'Unavailable: not enough training examples'
+    state=('Rule-based run: no GNN selected' if row['status']=='not_selected' else
+        status_label(row['status']) if row['available'] else 'Unavailable: not enough training examples')
     return f'{CLASS_LABELS[klass]} | {"Added / increased" if direction=="gain" else "Removed / decreased"}: {state}'
+
+
+def _original_score_view(frame,document,scores,*,probabilities):
+    bounds=frame_bounds(frame);size=(400,230);flip=bool(frame['grid'].crs) or frame['grid'].affine[4]<0
+    panels=[]
+    for year,task in zip(frame['years'],('built_over','building_gain')):
+        image=display_rgb(*sample_rgb(frame,year,bounds,size))
+        for node in document['nodes']:
+            row=scores.get((node['id'],task))
+            if node['year']!=year or row is None or (not probabilities and int(row.get('prediction',-1))!=1):continue
+            p=float(row['probability'])
+            color=(int(255*p),int(170*(1-p)),40) if probabilities else '#e63946'
+            paint_geometry(image,shape(node['geometry']),bounds,color,alpha=110,flip_y=flip,width=2)
+        panels.append(image)
+    paired=horizontal_panels(panels,[f'{frame["years"][0]} | Land built over',f'{frame["years"][1]} | New / extended buildings'])
+    return compose(paired,'Original thesis building ST-GNN',[
+        'Scores are from a new-input fit, trained on this area. They are not independent accuracy.',
+        'Unknown or unsupported targets are unscored; other classes have no separate GNN heads.'])[0]
 
 
 def _event_text(event,scores):
@@ -106,6 +130,13 @@ def _predicted_events(document,catalog,scores):
     for (gid,task),row in sorted(scores.items()):
         if gid not in nodes or (gid,task) in covered or int(row.get('prediction',-1))!=1:continue
         node=nodes[gid];direction=task.rsplit('_',1)[1]
+        if task=='built_over':
+            events.append({'event_id':'gnn:'+gid+':built_over','kind':'conversion',
+                'class_id':1,'source_class':node['class_id'],'target_class':1,
+                'geometry':node['geometry'],'area':node.get('area',shape(node['geometry']).area),
+                'area_units':catalog.get('transition_matrix',{}).get('area_units','pixels squared'),
+                'status':'predicted','related_tasks':[task],'source_nodes':[gid],'target_nodes':[]})
+            continue
         events.append({'event_id':'gnn:'+gid+':'+task,'kind':direction,'class_id':node['class_id'],
             'geometry':node['geometry'],'area':node.get('area',shape(node['geometry']).area),
             'area_units':catalog.get('transition_matrix',{}).get('area_units','pixels squared'),
@@ -204,7 +235,9 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
     for i,line in enumerate(structural_lines):draw.text((20,y+12+i*23),line,font=font(),fill='#182331')
     paths['change_report']=directory/'change_report.png';sheet.save(paths['change_report'])
     for name,probabilities in [('gnn_predictions',False),('gnn_probabilities',True)]:
-        paths[name]=directory/(name+'.png');_score_view(frame,document,scores,tasks,probabilities=probabilities).save(paths[name])
+        view=(_original_score_view(frame,document,scores,probabilities=probabilities)
+            if (gnn_result or {}).get('model_source') else _score_view(frame,document,scores,tasks,probabilities=probabilities))
+        paths[name]=directory/(name+'.png');view.save(paths[name])
     transition,transition_record=_transition_view(catalog,frame['years']);paths['class_transitions']=directory/'class_transitions.png';transition.save(paths['class_transitions'])
     # Overview PNGs combine the independently retained stage products without removing them.
     for name,stage in [('segmentation_overview','segmentation'),('spatial_graph','graphs')]:

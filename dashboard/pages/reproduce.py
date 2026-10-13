@@ -28,17 +28,14 @@ st.subheader("Commands")
 st.code("""# dashboard
 python -m streamlit run thesis_dashboard.py
 
-# original image-comparison tool (unchanged; also a dashboard page)
-python -m streamlit run streamlit_app.py
-
 # legacy building ST-GNN: inputs once, full reproduction, verification
 python -m src legacy-building-gnn bundle --source D:\\new\\DelAnyV2_Experiment\\segmentation_v2 --metadata D:\\new\\DelAnyV2_Experiment\\dataset\\2023\\metadata.csv
 python -m src legacy-building-gnn run --output artifacts/legacy_building_stgnn/<run>
 python -m src legacy-building-gnn verify --output artifacts/legacy_building_stgnn/<run>
 
-# multi-class pipeline on one co-registered tile pair (as used for artifacts/shouf3)
-python -m src pipeline run --segmentation new --graph new --change gnn --images <2013.tif> <2023.tif> --years 2013 2023 --no-register-images --harmonize-images --device cuda --max-report-pixels 256000000 --output artifacts/shouf3/<tile>_geo""",
+# selectable pipeline; each method can be changed independently
+python -m src pipeline run --segmentation new --graph new --change gnn --images <before.tif> <after.tif> --years 2013 2023 --device cpu --max-report-pixels 256000000 --output artifacts/image_comparisons/<run>""",
         language="powershell")
 st.subheader("Documentation")
-for doc in ["docs/legacy-building-stgnn.md", "docs/all-class-change-results.md", "docs/pipeline-validation.md", "docs/research-sources-for-thesis.md"]:
+for doc in ["docs/pipeline-options.md", "docs/legacy-building-stgnn.md", "docs/thesis-dashboard.md", "docs/pipeline-validation.md", "docs/research-sources-for-thesis.md"]:
     st.markdown(f"- `{doc}`" + ("" if (D.ROOT / doc).is_file() else " (missing)"))

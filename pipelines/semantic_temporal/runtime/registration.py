@@ -160,10 +160,17 @@ def prepare_comparison(context):
             for a,b in pairs:
                 try: m,r=_matched_controls(by_key[a],by_key[b],prepared,feature_diagnostics)
                 except ValueError: continue
-                try:fit(m,r,max_residual_m=options.get('registration_max_residual',2.0))
+                try:local_fit=fit(m,r,max_residual_m=options.get('registration_max_residual',2.0))
                 except ValueError:
                     feature_diagnostics[-1]['fit_status']='rejected_insufficient_local_support'
                     continue
+                # Preserve the accepted local consensus. Reintroducing rejected
+                # controls makes the final fit fail after duplicate SIFT points
+                # are removed, even when this image pair already passed RANSAC.
+                keep=np.asarray(local_fit['inlier_mask'],dtype=bool)
+                m=np.asarray(m)[keep];r=np.asarray(r)[keep]
+                feature_diagnostics[-1]['local_inlier_count']=int(keep.sum())
+                feature_diagnostics[-1]['local_point_count']=len(keep)
                 moving.extend(m);reference.extend(r)
                 control_keys.extend([(a,b)]*len(m))
             if len(moving)<6: raise ValueError('Registration lacks distributed landmarks; supply --registration-json')

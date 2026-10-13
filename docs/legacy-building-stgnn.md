@@ -1,5 +1,13 @@
 # Legacy building spatio-temporal GNN (optional pipeline)
 
+**Dashboard update (12 October 2026):** this is now the sole GNN implementation used by
+selectable general pipelines as well as the preserved thesis experiment. Its original code
+and reference outputs are unchanged. `adapter.py` supplies current-input features/relations
+to the original functions; those new-input fits are explicitly training only. The former
+experimental multi-class RGNN was removed. This is project-specific model code, not a
+downloaded pretrained checkpoint. Git records contributor Roaa Elmir's integration commit
+`a9f9df7`. The original implementation does not save trained weights.
+
 The original building-change GNN of the 2013 → 2023 Shouf study (7 tiles, frozen 4 October 2026), integrated as an
 **optional, exactly reproducible** pipeline. It is kept separate from the multi-class pipeline and from any future
 improved model: its own command, package (`pipelines/legacy_building_stgnn/`), input bundle

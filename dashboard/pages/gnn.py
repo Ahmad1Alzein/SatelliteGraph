@@ -9,11 +9,11 @@ from dashboard import ui
 
 ui.setup()
 st.title("5 · Spatio-temporal GNN")
-tab_legacy, tab_mc = st.tabs(["Legacy building ST-GNN (frozen baseline)", "Multi-class RGNN (current pipeline)"])
+tab_legacy, tab_mc = st.tabs(["Original thesis ST-GNN (preserved results)", "Selectable pipeline runs"])
 
-with tab_legacy:
+def preserved_results():
     if not ui.need("legacy_run", "A verified legacy building ST-GNN run"):
-        st.stop()
+        return
     rep = D.legacy_report()
     st.markdown("Relational GNN (R-GCN style, 2 layers, 64 hidden) on the 7-tile strip spatio-temporal graph. "
                 "It predicts **2023 new / extended buildings** and **2013 land built over by 2023**. "
@@ -52,31 +52,25 @@ with tab_legacy:
     st.caption(f"Labelled nodes {rep['labelled_nodes']:,}; positives {rep['positives']}. Figures are the frozen originals, "
                "regenerated and pixel-verified.")
 
+with tab_legacy:
+    preserved_results()
+
 with tab_mc:
     runs = D.multiclass_runs()
-    st.markdown("The current pipeline extends the RGNN to **16 tasks** (gain / loss for 8 classes). A head produces scores "
-                "only when it has enough supported examples; otherwise it reports `insufficient_data`.")
-    ui.badges("descriptive", "external")
+    st.markdown('Selectable runs use the same original binary ST-GNN implementation shown above. '
+        'It scores later buildings and earlier land built over. Fits on new inputs are separate experiments; '
+        'the frozen results above retain their original predictions and evaluation.')
+    st.code('pipelines/legacy_building_stgnn/original/gnn_change.py',language=None)
+    ui.badges('descriptive')
     if not runs:
-        st.info("No multi-class pipeline runs found (SG_RUNS).")
+        st.info('No pipeline runs found. Use Run pipelines & results to create a comparison.')
     else:
         rows = []
         for name in runs:
             g = D.run_gnn(name)
-            hs = g.get("head_status", {})
-            st_ = pd.Series([h.get("status") if isinstance(h, dict) else h for h in hs.values()]).value_counts().to_dict()
-            rows.append({"run": D.run_label(name), "GNN status": g.get("status"), "positive targets": g.get("positive_targets"),
-                         "negative targets": g.get("negative_targets"), "checkpoint": "external" if g.get("checkpoint") and "lsscd" in str(g.get("checkpoint")) else ("trained in run" if g.get("checkpoint") else "none"),
-                         "heads": ", ".join(f"{k}: {v}" for k, v in st_.items())})
+            current=bool(g.get('model_source'))
+            rows.append({'run':D.run_label(name),'GNN status':g.get('status') if current or g.get('status')=='not_selected' else 'retired experimental run',
+                'positive targets':g.get('positive_targets') if current else None,
+                'negative targets':g.get('negative_targets') if current else None})
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-        pick = st.selectbox("Head status for run", list(runs), format_func=D.run_label)
-        hs = D.run_gnn(pick).get("head_status", {})
-        st.dataframe(pd.DataFrame([{"task": k, **(v if isinstance(v, dict) else {"status": v})} for k, v in hs.items()]),
-                     hide_index=True, width="stretch", height=420)
-        st.warning("No multi-class head has a held-out evaluation on these Al Shouf tiles: almost all heads report "
-                   "insufficient_data (a single image pair yields too few reliable rule targets), and the only trained head "
-                   "(training_only, tile_00006) was trained and scored on the same image pair. The externally trained LsSCD-Ex "
-                   "checkpoint is not present on this machine. No multi-class GNN scores are therefore presented as results.")
-        st.markdown(ui.badge("external") + " Reported in `docs/all-class-change-results.md` (artifacts not on this machine, "
-                    "not re-verified here): on the external LsSCD-Ex test split the full temporal-difference RGNN reached "
-                    "macro AP 0.559 vs 0.304 without edges; 4 of 16 directions passed validation.", unsafe_allow_html=True)
+    st.page_link('dashboard/pages/pipelines.py',label='Run pipelines & inspect results')

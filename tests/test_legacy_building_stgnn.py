@@ -3,6 +3,7 @@
 The end-to-end test needs the hash-verified input bundle (data/legacy_building_stgnn, built with
 `python -m src legacy-building-gnn bundle`) and is skipped without it."""
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -123,6 +124,7 @@ def test_cli_exposes_optional_legacy_pipeline_without_changing_pipeline_command(
 
 
 @pytest.mark.skipif(not (BUNDLE / "strip").is_dir(), reason="legacy input bundle not available")
+@pytest.mark.skipif(importlib.util.find_spec('osgeo') is None, reason="frozen figure regeneration requires its recorded GDAL environment")
 def test_frozen_figures_regenerate_pixel_identical(tmp_path):
     R.verify_bundle(BUNDLE)
     report = R.run(BUNDLE, tmp_path / "run", tiles=["tile_00002"], reuse_frozen_predictions=True)

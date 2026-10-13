@@ -25,6 +25,27 @@ def kinds(result, class_id):
 
 
 class ChangeEventTests(unittest.TestCase):
+    def test_appearance_clips_mixed_polygon_line_contact_before_area_difference(self):
+        from shapely.ops import unary_union
+        from shapely.geometry import shape
+        domain=box(0,0,100,100)
+        appeared=unary_union([box(10,10,80,80),box(79,10,102,11),
+                              box(101,10,102,102),box(90,100,102,101)])
+        background=domain.difference(appeared)
+        self.assertEqual(appeared.intersection(domain).geom_type,'GeometryCollection')
+        earlier=[dict(node_id='old-background',year=2013,
+                      segment_type={'id':0},mean_semantic_confidence=1.)]
+        later=[dict(node_id=name,year=2023,segment_type={'id':klass},mean_semantic_confidence=1.)
+               for name,klass in [('new-land',1),('new-background',0)]]
+        result=detect_change_events(earlier,later,[domain],[appeared,background],
+            ChangePolicy(minimum_area_m2=1.,boundary_tolerance_m=0.))
+        event=next(e for e in result['events'] if e['class_id']==1)
+        self.assertEqual(event['relation'],'appeared')
+        self.assertEqual(event['measurements']['gain_area_m2'],4920.)
+        self.assertEqual(event['measurements']['area_before_m2'],0.)
+        self.assertEqual(shape(event['geometry_world']).area,4920.)
+        self.assertEqual(shape(event['geometry_world']).geom_type,'Polygon')
+
     def test_refinement_keeps_dominant_local_witness_for_one_new_object(self):
         old_near,old_far,new = box(0,0,10,10),box(40,0,45,10),box(0,0,50,10)
         earlier = [{"node_id":name,"segment_type":{"id":0},"geometry_world":mapping(geometry)}

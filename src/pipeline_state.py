@@ -4,7 +4,8 @@ import hashlib
 import json
 
 GRAPH_PROFILE = 'directional-all-class.v1'
-RENDER_PROFILE = 'major-changes-native-owned-crops.v4'
+RENDER_PROFILE = 'original-building-stgnn-and-stage5-reports.v6'
+REGISTRATION_PROFILE = 'guided-current-images-local-consensus.v2'
 
 
 def stage_fingerprint(inputs: list[Path], settings: dict) -> str:
@@ -23,7 +24,9 @@ def input_fingerprint(options: dict) -> str:
             'target_crs','registration_json','register_images','registration_max_residual','inference_window','inference_overlap','tta')
     settings = {k: options[k] for k in keys if options.get(k) is not None}
     settings['input_profile']='auto-multiscale-pixel-pair-and-natural-row.v3'
-    if options.get('register_images'):settings['registration_profile']='guided-current-images.v1'
+    # Unmapped image pairs also register automatically when the explicit flag
+    # is false, so the algorithm version must always bind their cached context.
+    settings['registration_profile']=REGISTRATION_PROFILE
     if options.get('harmonize_images'):
         settings['harmonize_images'] = True
         settings['preprocessing_profile'] = 'paired-harmonization.v1'
@@ -89,7 +92,7 @@ def validate_resume(state: dict, stage: str, fingerprint: str) -> None:
 
 def change_fingerprint(options: dict) -> str:
     settings={k:options.get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance','change_policy','reviewed_targets')}
-    settings['algorithm']='all-class-measured-boundary-margin.v3'
+    settings['algorithm']='original-thesis-stgnn-and-stage5-classical.v1'
     files=[]
     for key in ('change_policy','reviewed_targets'):
         if options.get(key):

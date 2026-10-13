@@ -67,9 +67,10 @@ def test_cli_dispatches_to_selector(tmp_path, fakes, capsys):
 
 def test_experiment_package_is_complete():
     pkg = ps.PACKAGE
-    for f in ("run_experiment.py", "verify_outputs.py", "README.md", "pipeline/run_tile_pipeline.py",
+    for f in ("run_experiment.py", "verify_outputs.py", "pipeline/run_tile_pipeline.py",
               "reference/input_manifest.json", "reference/expected_outputs.json", "reference/expected_results.json",
               "reference/audit_verdicts.csv", "reference/shift_samples.csv", "environment/environment_windows_exact.yml"):
         assert (pkg / f).is_file(), f
+    assert (pkg.parents[1]/'docs/frozen-semantic-experiment.md').is_file()
     assert len(json.loads((pkg / "reference" / "input_manifest.json").read_text())) == 24
     assert len(json.loads((pkg / "reference" / "expected_outputs.json").read_text())) == 551

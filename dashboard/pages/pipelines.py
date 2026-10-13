@@ -1,4 +1,4 @@
-"""Run: python -m streamlit run streamlit_app.py"""
+"""Selectable pipeline workspace, mounted by thesis_dashboard.py."""
 from pathlib import Path
 import io
 import math
@@ -12,18 +12,18 @@ from collections import Counter
 import streamlit as st
 import pandas as pd
 
-ROOT=Path(__file__).resolve().parent
-EXTERNAL_CHECKPOINT=ROOT/'checkpoints/semantic_temporal/gnn/lsscd_major_pixels/model.pt'
+ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from pipelines.semantic_temporal.runtime.storage import read_json,verify_result_manifest
 from pipelines.semantic_temporal.runtime.change_contracts import CLASS_LABELS,EDGE_LABELS,TASKS,status_label
 from pipelines.semantic_temporal.runtime.reports.common import class_color,EDGE_STYLES
 from pipelines.semantic_temporal.runtime.reports.changes import event_crops,_scores,_predicted_events
 from pipelines.semantic_temporal.runtime.preview import event_rows,filter_rows,grid_image
+from dashboard.pipeline_controls import METHOD_LABELS,pipeline_command
 
 st.set_page_config(page_title='SatelliteGraph | Image comparison',layout='wide')
 st.title('SatelliteGraph · Image comparison')
-st.caption('Original images → segmentation → spatial graphs → matching → all-class change review')
+st.caption('Choose segmentation, spatial graph and change detection independently, then inspect their common results.')
 
 
 def launch(command,output):
@@ -57,28 +57,50 @@ def bundle(output,stamp):
 
 
 with st.expander('Choose two images and run the full pipeline',expanded=True):
+    methods=st.columns(3)
+    segmentation=methods[0].selectbox('Segmentation',list(METHOD_LABELS['segmentation']),
+        format_func=METHOD_LABELS['segmentation'].get,key='pipeline_segmentation')
+    graph_method=methods[1].selectbox('Spatial graph',list(METHOD_LABELS['graph']),
+        format_func=METHOD_LABELS['graph'].get,key='pipeline_graph')
+    change_method=methods[2].selectbox('Change detection',list(METHOD_LABELS['change']),
+        format_func=METHOD_LABELS['change'].get,key='pipeline_change')
+    if change_method=='gnn':
+        st.caption('Uses the original thesis building ST-GNN: later new/extended buildings and earlier land built over. '
+            'Other classes are reviewed as image-evidence candidates. New-input fits are separate from the preserved thesis results.')
+    input_mode=st.radio('Input source',['Upload images','Local image paths','Local tile folders'],horizontal=True)
     cols=st.columns(2)
-    before=cols[0].file_uploader('Before image',type=['png','tif','tiff'],key='before')
-    after=cols[1].file_uploader('After image',type=['png','tif','tiff'],key='after')
-    st.caption('PNG pairs need no extra files. Alignment is automatic; measurements remain in pixels unless true map information is available.')
-    external_ready=EXTERNAL_CHECKPOINT.is_file() and EXTERNAL_CHECKPOINT.with_suffix('.json').is_file()
-    optical_png_pair=bool(before and after and Path(before.name).suffix.lower()=='.png' and Path(after.name).suffix.lower()=='.png')
-    use_external=st.checkbox('Use the experimental externally supervised GNN for optical PNG pairs',value=external_ready,
-        disabled=not(external_ready and optical_png_pair),
-        help='Uses the local LsSCD-Ex checkpoint. Only supported class heads produce scores. Academic/noncommercial data license; accuracy on these images is unmeasured.')
-    if external_ready and optical_png_pair and use_external:
-        st.caption('Using experimental external weights. Validation support does not establish dependable detection; inspect held-out metrics in Training and review transfer to different satellites/views.')
+    if input_mode=='Upload images':
+        before=cols[0].file_uploader('Before image',type=['png','tif','tiff'],key='before')
+        after=cols[1].file_uploader('After image',type=['png','tif','tiff'],key='after')
+    else:
+        before=cols[0].text_input('Before folder' if input_mode=='Local tile folders' else 'Before image path')
+        after=cols[1].text_input('After folder' if input_mode=='Local tile folders' else 'After image path')
+    st.caption('PNG pairs are aligned automatically in image coordinates. Tile folders use their placement metadata. '
+        'Mapped GeoTIFFs keep their map information; pixel-only measurements remain in pixels.')
+    options=st.columns(4)
+    first_year=options[0].number_input('Before year',min_value=1,max_value=9998,value=2013)
+    last_year=options[1].number_input('After year',min_value=2,max_value=9999,value=2023)
+    device=options[2].selectbox('Processing device',['cpu','auto','cuda'])
+    pixel_size=options[3].number_input('Known metres per pixel (0 = unknown)',min_value=0.,value=0.,step=.25)
+    register_images=st.checkbox('Estimate image registration',value=False,
+        help='For mapped inputs, estimate alignment from current image landmarks. Unmapped PNG pairs align automatically.')
+    harmonize_images=st.checkbox('Harmonize brightness and sharpness before segmentation',value=False)
     active=st.session_state.get('job') is not None and st.session_state.job.poll() is None
     if st.button('Run full comparison',type='primary',disabled=not(before and after) or active):
         try:
             output=ROOT/'artifacts/image_comparisons'/uuid.uuid4().hex[:12]
-            inputs=output/'inputs';inputs.mkdir(parents=True)
-            paths=[]
-            for name,upload in [('before',before),('after',after)]:
-                path=inputs/(name+Path(upload.name).suffix.lower());path.write_bytes(upload.getvalue());paths.append(path)
-            launch([sys.executable,'-u','-m','src','pipeline','run','--segmentation','new','--graph','new','--change','gnn',
-                '--images',*map(str,paths),'--output',str(output),'--device','cpu','--max-report-pixels','256000000',
-                *(['--gnn-checkpoint',str(EXTERNAL_CHECKPOINT)] if use_external and external_ready and optical_png_pair else [])],output)
+            if input_mode=='Upload images':
+                inputs=output/'inputs';inputs.mkdir(parents=True)
+                paths=[]
+                for name,upload in [('before',before),('after',after)]:
+                    path=inputs/(name+Path(upload.name).suffix.lower());path.write_bytes(upload.getvalue());paths.append(path)
+            else:
+                paths=[Path(p).expanduser().resolve() for p in (before,after)]
+            command=pipeline_command(output,segmentation,graph_method,change_method,paths,
+                input_kind='folders' if input_mode=='Local tile folders' else 'images',
+                years=(first_year,last_year),device=device,pixel_size=pixel_size or None,
+                register_images=register_images,harmonize_images=harmonize_images)
+            launch(command,output)
             st.rerun()
         except Exception as exc:st.error(str(exc))
 
@@ -108,12 +130,26 @@ if not selected:
     st.stop()
 output=Path(selected).expanduser().resolve()
 try:
+    from dashboard.run_results import change_view_status,show_archived_results
+    state=read_json(output/'run.json')
+    if change_view_status(output,state)=='archived':
+        show_archived_results(output,state)
+        st.stop()
     context,frame,document,catalog,result,scores,rows=bundle(str(output),(output/'run.json').stat().st_mtime_ns)
 except Exception as exc:
     st.error(f'Results are not ready: {exc}')
     st.stop()
 
 st.caption(f'Run: {output} · Measurements: {frame["grid"].units}. Pixel areas are image-relative, not square metres.')
+state=read_json(output/'run.json')
+selected_methods={stage:state['stages'][stage]['method'] for stage in ('segmentation','graph','change')}
+original_run=result.get('model_source')=='pipelines/legacy_building_stgnn/original/gnn_change.py'
+retired_run=selected_methods['change']=='gnn' and not original_run
+method_labels={stage:METHOD_LABELS[stage].get(method,method) for stage,method in selected_methods.items()}
+if retired_run:
+    method_labels['change']='Historical experimental all-class RGNN (retired)'
+    st.warning('This saved run used the retired experimental RGNN. Its historical outputs are retained; new GNN runs use the original thesis building ST-GNN.')
+st.caption(' · '.join(method_labels.values()))
 tabs=st.tabs(['Changes','Segmentation','Graphs','Matching','GNN training'])
 
 with tabs[0]:
@@ -123,26 +159,29 @@ with tabs[0]:
         help='Raw segmentation differences are review candidates, not confirmed physical changes.')
     major_only=st.checkbox('Focus on major changes',value=True,
         help='Show whole-building appearance/disappearance and substantial road or land-cover changes. Hide thin outlines, small size changes and vegetation subclass swaps.')
-    allowed=sorted({r['status'] for r in rows}) if show_weak else sorted({r['status'] for r in rows}&{'reliable','predicted'})
-    filter_cols=st.columns(4)
+    allowed=sorted({r['status'] for r in rows}) if show_weak or selected_methods['change']=='classical' else sorted({r['status'] for r in rows}&{'reliable','predicted'})
+    filter_cols=st.columns(3)
     statuses=filter_cols[0].multiselect('Evidence status',sorted({r['status'] for r in rows}),
         default=allowed,format_func=status_label,key='statuses_'+str(show_weak))
     classes=filter_cols[1].multiselect('Classes',list(range(1,9)),default=list(range(1,9)),format_func=lambda k:CLASS_LABELS[k])
     area=filter_cols[2].number_input('Minimum change area',min_value=0.,value=0.,step=10.)
-    confidence=filter_cols[3].slider('Minimum segment confidence',0.,1.,0.,.05,
-        help='Segmentation model confidence, not a GNN change score or measured accuracy.')
     has_scores=any(r['gnn_score'] is not None for r in rows)
     use_score=st.checkbox('Filter by GNN change score',disabled=not has_scores)
-    threshold=st.slider('Minimum GNN score',0.,1.,.5,.05,disabled=not(use_score and has_scores))
-    if not has_scores:st.info('No eligible, validation-supported GNN scores are available for this comparison. Check the per-class head status and training details below. Image-evidence candidates remain reviewable.')
-    filtered=filter_rows(rows,statuses=statuses,classes=classes,min_area=area,min_segment_confidence=confidence,
+    threshold=st.slider('Minimum GNN change score',0.,1.,.5,.05,disabled=not(use_score and has_scores))
+    if has_scores:
+        st.caption('Higher GNN change scores indicate greater model support for a change. Evidence labels distinguish strong image evidence from weak or seasonal candidates.')
+        if original_run:st.caption('These scores come from a fit trained on this area; they are not independently tested confidence or accuracy.')
+    if not has_scores:st.info('This comparison has no GNN scores. Classical runs use rule-based events; the original ST-GNN needs reliable changed and unchanged training targets.')
+    filtered=filter_rows(rows,statuses=statuses,classes=classes,min_area=area,
         min_gnn_score=threshold if use_score and has_scores else None,major_only=major_only)
     st.write(f'{len(filtered):,} of {len(rows):,} changes shown · {dict(Counter(r["status"] for r in filtered))}')
     st.dataframe(pd.DataFrame([{'Class':CLASS_LABELS[k],
         'Visible changes':sum(k in r['classes'] for r in filtered),
         'Image-evidence candidates':sum(k in r['classes'] for r in rows),
-        'GNN gain head':result.get('head_status',{}).get(TASKS[(k-1)*2],{}).get('status','unavailable'),
-        'GNN loss head':result.get('head_status',{}).get(TASKS[(k-1)*2+1],{}).get('status','unavailable')}
+        'GNN scope / status':('Rule-based run; no GNN' if selected_methods['change']=='classical' else
+            'Historical experimental scores' if retired_run else
+            'Later building gain: '+result.get('head_status',{}).get('building_gain',{}).get('status','unavailable') if k==1 else
+            'Earlier land built over: '+result.get('head_status',{}).get('built_over',{}).get('status','unavailable'))}
         for k in range(1,9)]),hide_index=True,width='stretch')
     if not filtered:
         st.info('No changes pass the current filters. Weak or seasonal differences can be inspected with the checkbox above; they are not confirmed changes.')
@@ -155,15 +194,14 @@ with tabs[0]:
                     st.markdown(f'**{row["type"]}** · {status_label(row["status"])}')
                     panels,_=event_crops(frame,row['event'],(256,256))
                     for side,panel,title in zip(st.columns(2),panels,['Before','After']):side.image(panel,caption=title,width='stretch')
-                    segment='unavailable' if row['segment_confidence'] is None else f'{row["segment_confidence"]:.3f}'
                     gnn='unavailable' if row['gnn_score'] is None else f'{row["gnn_score"]:.3f}'
-                    st.caption(f'{row["area"]:,.1f} {row["area_units"]} · Segment confidence {segment} · GNN score {gnn}')
+                    st.caption(f'{row["area"]:,.1f} {row["area_units"]} · GNN change score: {gnn}')
                     st.caption(row['event_id'])
     if visible:
         grid,_=grid_image(frame,[r['event'] for r in visible],scores);buffer=io.BytesIO();grid.save(buffer,format='PNG')
         st.download_button('Download this page as one grid PNG',buffer.getvalue(),file_name=f'change_grid_{page:03d}.png',mime='image/png')
     with st.expander('Change data'):
-        st.dataframe(pd.DataFrame([{k:v for k,v in r.items() if k!='event'} for r in filtered]),width='stretch')
+        st.dataframe(pd.DataFrame([{k:v for k,v in r.items() if k not in ('event','segment_confidence')} for r in filtered]),width='stretch')
 
 with tabs[1]:
     st.subheader('Segmentation and class data')
@@ -191,7 +229,7 @@ with tabs[2]:
                 if record['year']==year and not record.get('annual'):
                     st.image(str(output/record['path']),width='stretch')
                     st.caption(f'{record["node_count"]} nodes · {record["edge_count"]} edges')
-    for kind in ('touches','near','context_near'):
+    for kind in (('touches',) if selected_methods['graph']=='old' else ('touches','near','context_near')):
         color,style=EDGE_STYLES[kind]
         st.markdown(f'<span style="color:{color}">━━</span> **{EDGE_LABELS[kind]}** · {style}',unsafe_allow_html=True)
 
@@ -202,37 +240,12 @@ with tabs[3]:
         if path.is_file():st.image(str(path),caption=name.replace('_',' ').capitalize(),width='stretch')
 
 with tabs[4]:
-    st.subheader('GNN task support and review')
-    st.caption('Training needs changed and unchanged examples for each class/direction. One image pair supports training only; it cannot establish held-out accuracy.')
-    st.dataframe(pd.DataFrame([dict(task=task,**head) for task,head in result.get('head_status',{}).items()]),width='stretch')
-    if result.get('evaluation',{}).get('status')=='external_annotated_subset':
-        st.caption('External held-out annotated-node metrics. These do not measure accuracy on the uploaded images.')
-        st.dataframe(pd.DataFrame([dict(task=task,**metrics) for task,metrics in result['evaluation']['per_task'].items()]),width='stretch')
-    eligible=[r for r in catalog['targets'] if r['eligible']]
-    if not eligible:st.info('No node/task passes the coverage, class and confidence gates. Review labels cannot override those gates.')
+    st.subheader('Historical experimental RGNN (retired)' if retired_run else 'Original thesis ST-GNN')
+    if selected_methods['change']=='classical':
+        st.info('Rule-based change detection selected. No GNN was trained for this run.')
     else:
-        node_lookup={n['id']:n for n in document['nodes']}
-        options={f'{r["task"]} | {r["gid"]}':r for r in eligible}
-        choice=st.selectbox('Review an eligible training example',list(options));target=options[choice];node=node_lookup[target['gid']]
-        direction=target['task'].rsplit('_',1)[1]
-        event=dict(event_id='review:'+target['gid']+':'+target['task'],kind=direction,class_id=node['class_id'],geometry=node['geometry'],area=node['area'])
-        panels,_=event_crops(frame,event,(320,320))
-        for side,panel,title in zip(st.columns(2),panels,['Before','After']):side.image(panel,caption=title,width='stretch')
-        st.caption(f'Current label: {target.get("label")} · Reason: {target["reason"]}. Judge this class/direction inside the highlighted footprint.')
-        decision=st.radio('Reviewed outcome',['Unsure','Changed','Unchanged'],horizontal=True)
-        review_path=output/'reviewed_targets.csv'
-        if st.button('Save reviewed label',disabled=decision=='Unsure'):
-            existing=pd.read_csv(review_path).to_dict('records') if review_path.is_file() else []
-            existing=[r for r in existing if (r['gid'],r['task'])!=(target['gid'],target['task'])]
-            existing.append(dict(gid=target['gid'],task=target['task'],label=int(decision=='Changed'),confidence=1.,source='user_visual_review'))
-            pd.DataFrame(existing).to_csv(review_path,index=False);st.success('Reviewed label saved.')
-        if review_path.is_file():
-            st.dataframe(pd.read_csv(review_path),width='stretch')
-            fixed_checkpoint=bool(context.options.get('gnn_checkpoint'))
-            if fixed_checkpoint:
-                st.caption('This run uses fixed external weights. Reviewed-label training requires a fresh run with the external GNN option unchecked; it does not fine-tune these weights.')
-            if st.button('Train supported GNN heads and refresh changes',disabled=active or fixed_checkpoint):
-                try:
-                    launch([sys.executable,'-u','-m','src','pipeline','change','--method','gnn','--output',str(output),
-                        '--reviewed-targets',str(review_path)],output);st.rerun()
-                except Exception as exc:st.error(str(exc))
+        st.caption(result.get('reason','Saved experimental run; this model is no longer used.' if retired_run else 'Original binary building ST-GNN; separate new-input experiment.'))
+        st.code(result.get('model_source','Historical run: experimental model has been retired'),language=None)
+    st.dataframe(pd.DataFrame([dict(task=task,**head) for task,head in result.get('head_status',{}).items()]),width='stretch')
+    st.caption('The preserved thesis experiment, figures and held-out predictions remain on the Spatio-temporal GNN page. '
+        'The original model has no downloaded weights or saved checkpoint.')

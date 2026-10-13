@@ -1,7 +1,7 @@
 """MSc thesis dashboard: multi-class object-level spatio-temporal change detection, Al Shouf 2013 -> 2023.
 
 Run:  python -m streamlit run thesis_dashboard.py
-The original image-comparison tool (streamlit_app.py) is unchanged and available as a page; it can still be run alone.
+The selectable pipeline workspace is part of this dashboard.
 """
 from pathlib import Path
 import sys
@@ -29,7 +29,7 @@ pages = {
         st.Page(P + "evaluation.py", title="7 · Evaluation", icon="📏"),
     ],
     "Tools": [
-        st.Page("streamlit_app.py", title="Run a new image pair", icon="▶️", url_path="image_comparison"),
+        st.Page(P + "pipelines.py", title="Run pipelines & results", icon="▶️", url_path="image_comparison"),
         st.Page(P + "reproduce.py", title="Reproduce & data", icon="🧾"),
     ],
 }

@@ -162,46 +162,62 @@ def legacy_audit() -> pd.DataFrame:
 
 # ----------------------------------------------------------------------------- multi-class pipeline runs
 def multiclass_runs() -> dict:
-    root = paths()["runs"]
     out = {}
-    if not root.is_dir():
-        return out
-    for run in sorted(root.iterdir()):
-        if (run / "temporal" / "classical_changes.json").is_file() and (run / "run.json").is_file():
-            out[run.name] = run
+    roots=[paths()['runs']]
+    if not os.environ.get('SG_RUNS'):roots.append(ROOT/'artifacts/image_comparisons')
+    for root in roots:
+        if not root.is_dir():continue
+        for run in sorted(root.iterdir()):
+            if (run/'temporal/classical_changes.json').is_file() and (run/'run.json').is_file():
+                key=run.name if run.name not in out else root.name+'/'+run.name
+                out[key]=run
     return out
 
 
 def run_label(name: str) -> str:
-    seg = {"geo": "SegFormer + Delineate Anything (new)", "old": "SAM 2.1 + FasterSeg (old)"}
-    tile, _, kind = name.rpartition("_")
-    return f"{tile} · {seg.get(kind, kind)}"
+    state=json.loads((multiclass_runs()[name]/'run.json').read_text(encoding='utf-8'))
+    stages=state.get('stages',{})
+    return name+' · '+' / '.join(f'{stage}: {stages.get(stage,{}).get("method","unknown")}'
+        for stage in ('segmentation','graph','change'))
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False,max_entries=32)
+def _run_json(path: str, stamp: int) -> dict:
+    return json.loads(Path(path).read_text(encoding='utf-8'))
+
+
 def run_state(name: str) -> dict:
-    return json.loads((multiclass_runs()[name] / "run.json").read_text(encoding="utf-8"))
+    path=multiclass_runs()[name]/'run.json'
+    return _run_json(str(path),path.stat().st_mtime_ns)
 
 
-@st.cache_data(show_spinner="Reading change events…")
 def run_events(name: str) -> pd.DataFrame:
-    doc = json.loads((multiclass_runs()[name] / "temporal" / "classical_changes.json").read_text(encoding="utf-8"))
+    return events_from_run(multiclass_runs()[name])
+
+
+def events_from_run(run: Path) -> pd.DataFrame:
+    path=Path(run)/'temporal/classical_changes.json'
+    doc = _run_json(str(path),path.stat().st_mtime_ns)
     rows = []
     for e in doc["events"]:
         g = e["geometry"] if isinstance(e["geometry"], dict) else ast.literal_eval(e["geometry"])
         rows.append({"event_id": e["event_id"], "source_class": CLASSES.get(int(e["source_class"]), str(e["source_class"])),
-                     "target_class": CLASSES.get(int(e["target_class"]), str(e["target_class"])), "transition": e.get("display_name"),
-                     "status": e["status"], "season_sensitive": bool(e["season_sensitive"]), "area_m2": float(e["area"]),
+                     "target_class": CLASSES.get(int(e["target_class"]), str(e["target_class"])), "transition": e.get("display_name") or e.get('kind','change'),
+                     "status": e["status"], "season_sensitive": bool(e["season_sensitive"]), "area": float(e["area"]),
+                     "area_units": e.get('area_units',doc.get('transition_matrix',{}).get('area_units','unspecified')),
                      "related_tasks": ", ".join(e["related_tasks"] if isinstance(e["related_tasks"], list) else ast.literal_eval(e["related_tasks"])),
                      "source_nodes": len(e["source_nodes"] if isinstance(e["source_nodes"], list) else ast.literal_eval(e["source_nodes"])),
                      "target_nodes": len(e["target_nodes"] if isinstance(e["target_nodes"], list) else ast.literal_eval(e["target_nodes"])),
                      "geometry": g})
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows,columns=['event_id','source_class','target_class','transition','status',
+        'season_sensitive','area','area_units','related_tasks','source_nodes','target_nodes','geometry'])
 
 
-@st.cache_data(show_spinner=False)
 def run_gnn(name: str) -> dict:
-    return json.loads((multiclass_runs()[name] / "temporal" / "gnn" / "report.json").read_text(encoding="utf-8"))
+    state=run_state(name)
+    change=state.get('stages',{}).get('change',{})
+    if change.get('method')!='gnn':return {'status':'not_selected','head_status':{}}
+    return change.get('result',{}) or {'status':'unavailable','head_status':{}}
 
 
 @st.cache_data(show_spinner=False)

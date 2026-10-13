@@ -126,3 +126,35 @@ def test_registration_prioritizes_strong_coverage_pairs(tmp_path):
     context=build_context({'folders':[str(first),str(second)]},tmp_path/'run')
     pairs=registration_pairs(context,limit=3)
     assert set(pairs)=={('2017/a.png','2023/x.png'),('2017/b.png','2023/y.png'),('2017/c.png','2023/z.png')}
+
+
+def test_global_registration_uses_local_inliers_after_deduplication(tmp_path, monkeypatch):
+    """Rejected landmarks must not re-enter the final fit when duplicate SIFT points are removed."""
+    from PIL import Image
+    from pipelines.semantic_temporal.runtime.context import build_context
+    from pipelines.semantic_temporal.runtime import registration
+    from pipelines.semantic_temporal.runtime.storage import read_json
+    from src.config import load_config
+    images = [tmp_path/'before.png', tmp_path/'after.png']
+    for image in images:
+        Image.new('RGB', (128, 128), (100, 120, 140)).save(image)
+    config = load_config()
+    for model in ('instance_model', 'semantic_model'):
+        config['stage2'][model]['backend'] = 'fake'
+    context = build_context({'images': list(map(str, images)), 'years': [2013, 2023],
+                             'pixel_size': [1.5, 1.5], 'register_images': True,
+                             'old_config': config, 'semantic_models': str(tmp_path/'models')}, tmp_path/'run')
+    clean = np.array([(x, y) for y in (30., 90., 150.) for x in (30., 90., 150.)])
+    rng = np.random.default_rng(123)
+    moving = np.vstack([np.tile(clean, (3, 1)), rng.uniform(10, 180, (18, 2))])
+    reference = np.vstack([np.tile(clean+[3., -1.5], (3, 1)), rng.uniform(10, 180, (18, 2))])
+    def controls(_moving, _reference, _context, details):
+        details.append({'method': 'measured_landmarks'})
+        return moving, reference
+    monkeypatch.setattr(registration, '_matched_controls', controls)
+    prepared = registration.prepare_comparison(context)
+    fitted = prepared.options['registration']
+    assert fitted['point_count'] == fitted['inlier_count'] == 9
+    np.testing.assert_allclose(fitted['affine'], [1., 0., 3., 0., 1., -1.5], atol=1e-6)
+    saved = read_json(context.output/'prepared/registration_controls.json')
+    assert len(saved['pairs']) == 9

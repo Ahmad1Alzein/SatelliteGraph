@@ -15,6 +15,11 @@ def major_change(event,document,native_pixel=1.):
         return result(False,'Thin boundary or small footprint')
     if event.get('kind')=='conversion' and {event['source_class'],event['target_class']}<={3,4,5}:
         return result(False,'Vegetation subclass difference; season may explain it')
+    if (event.get('kind')=='conversion' and event.get('status')=='predicted'
+            and event.get('target_class')==1 and 'built_over' in event.get('related_tasks',[])):
+        # The original GNN scores the earlier land node, so it has no later
+        # building node ID for the building appearance test below.
+        return result(True,'Earlier land scored as built over by the original ST-GNN')
     if 1 in classes:
         nodes={n['id']:n for n in document['nodes']}
         ids=[g for g in event.get('source_nodes',[])+event.get('target_nodes',[]) if g in nodes and nodes[g]['class_id']==1]

@@ -66,7 +66,7 @@ def check_inputs(data: Path, ckpt: Path, strict: bool):
     print(f"  {len(man) - len(missing) - len(wrong)}/{len(man)} input files present with the expected SHA-256")
     if missing:
         print("  MISSING:\n    " + "\n    ".join(missing))
-        raise SystemExit("required inputs are missing - see README.md, section 'Inputs'")
+        raise SystemExit("required inputs are missing - see docs/frozen-semantic-experiment.md, section 'Inputs'")
     if wrong:
         print("  DIFFERENT CONTENT:\n    " + "\n    ".join(wrong))
         if strict:

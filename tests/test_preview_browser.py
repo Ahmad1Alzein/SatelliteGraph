@@ -36,7 +36,10 @@ def test_streamlit_upload_page_starts_without_extra_data(monkeypatch):
     from pathlib import Path
     from streamlit.testing.v1 import AppTest
     monkeypatch.delenv('SATELLITEGRAPH_RUN',raising=False)
-    app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'streamlit_app.py')).run(timeout=30)
+    from streamlit.util import calc_md5
+    app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'thesis_dashboard.py'))
+    app._page_hash=calc_md5('image_comparison')
+    app.run(timeout=60)
     assert not app.exception
     assert app.button[0].label=='Run full comparison' and app.button[0].disabled
 

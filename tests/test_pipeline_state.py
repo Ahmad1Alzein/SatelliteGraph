@@ -45,6 +45,18 @@ def test_selected_image_fingerprint_includes_discovered_placement_and_source(tmp
     assert input_fingerprint(options)!=original
 
 
+def test_automatic_png_registration_binds_the_registration_algorithm_version(tmp_path, monkeypatch):
+    from src import pipeline_state
+    images = [tmp_path/'before.png', tmp_path/'after.png']
+    for image in images:
+        image.write_bytes(b'original pixels')
+    # PNG registration is automatic even without the explicit checkbox flag.
+    options = {'images': list(map(str, images)), 'years': [2013, 2023], 'register_images': False}
+    original = pipeline_state.input_fingerprint(options)
+    monkeypatch.setattr(pipeline_state, 'REGISTRATION_PROFILE', 'upgraded-registration', raising=False)
+    assert pipeline_state.input_fingerprint(options) != original
+
+
 def test_old_model_config_fingerprint_binds_referenced_weights(tmp_path):
     from src.pipeline_state import input_fingerprint
     import yaml

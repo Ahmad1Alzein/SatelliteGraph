@@ -132,7 +132,7 @@ def render_outputs(context,stage,*,include_results=False):
         method=(read_json(ledger).get('stages',{}).get('change',{}).get('method')
                 if ledger.is_file() else context.options.get('change_method'))
         if method is None:method='gnn' if report.is_file() else 'classical'
-        gnn=read_json(report) if method=='gnn' and report.is_file() else None
+        gnn=read_json(report) if method=='gnn' and report.is_file() else {'method':'classical'} if method=='classical' else None
         paths.update(render_matching_results(graph,context,frame,catalog))
         paths.update(render_change_results(graph,context,frame,catalog,gnn))
     return paths if include_results else previews

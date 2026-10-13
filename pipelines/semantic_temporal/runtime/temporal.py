@@ -12,10 +12,10 @@ from affine import Affine
 from shapely import STRtree
 from shapely.geometry import shape
 from shapely.ops import unary_union
-from .contracts import TemporalArtifact,SCHEMA
+from .contracts import TemporalArtifact,SCHEMA,CLASSES
 from .storage import atomic_json,read_json,save_manifest,load_segmentation,write_raster
 from .graphs import NODE_FEATURES,EDGE_FEATURES
-from .adapters import CANONICAL_TO_OLD
+from .adapters import CANONICAL_TO_OLD,OLD_TO_CANONICAL
 from .change_contracts import RELATIONS,RELATION_PROFILE,TASKS
 
 TEMPORAL_EDGE_FEATURES=['iou','fraction_source','fraction_target','overlap_score',
@@ -212,12 +212,13 @@ def _image_evidence(document,grid,shape_hw,context):
     return arrays
 
 
-def _detect_legacy_classical(graph,context):
+def _detect_legacy_classical(graph,context,*,engine=None):
     document=read_json(graph.paths['graph']);nodes=document['nodes'];years=document['years'];method=document['method']
     earlier=[n for n in nodes if n['year']==years[0]];later=[n for n in nodes if n['year']==years[1]]
     if not earlier or not later: raise ValueError('Both years need observed nodes')
     source={n['id']:n for n in nodes};events=[];changes=[];units=document['units']
-    if method=='old' and units!='pixels':
+    use_stage5=engine=='stage5_classical' or (method=='old' and units!='pixels')
+    if use_stage5:
         from src.stage5.events import detect_change_events,ChangePolicy
         from .context import old_configuration
         settings=dict(old_configuration(context).get('stage5',{}).get('changes',{}))
@@ -298,7 +299,7 @@ def _detect_legacy_classical(graph,context):
         if node['observed_fraction']<.95: row.update(event='coverage_limited',label=None)
         elif node['class_id']==0 or node['known_counterpart_fraction']<.95: row.update(event='unknown_observation',label=None)
         elif node['confidence']<.6: row['label']=None
-    result={'status':'complete','years':years,'units':units,'engine':'stage5_classical' if method=='old' else 'semantic_image_evidence',
+    result={'status':'complete','years':years,'units':units,'engine':'stage5_classical' if use_stage5 else 'semantic_image_evidence',
             'node_changes':changes,'events':events,'audit_status':'not_provided','target_definition':'building construction/extension pseudo labels; agreement is not independently verified accuracy'}
     atomic_json(graph.directory/'classical_changes.json',result)
     pd.DataFrame([{'gid':r['gid'],'label':r['label'],'confidence':r['confidence'],'source':r['source'],'year':r['year']} for r in changes if r['label'] is not None],columns=['gid','label','confidence','source','year']).to_csv(graph.paths['targets'],index=False)
@@ -317,7 +318,7 @@ def boundary_margin(context):
     return max(0.,float(registration.get(key,0.)))
 
 
-def detect_classical(graph,context):
+def detect_classical(graph,context,*,engine=None):
     """Preserve the prior method result and publish exhaustive image evidence."""
     from .comparison import load_comparison
     from .all_class_evidence import detect_evidence
@@ -325,7 +326,8 @@ def detect_classical(graph,context):
     from .change_contracts import load_change_policy
     document=read_json(graph.paths['graph'])
     if all(any(n['year']==year for n in document['nodes']) for year in document['years']):
-        legacy=_detect_legacy_classical(graph,context)
+        legacy=_detect_legacy_classical(graph,context,
+            engine='stage5_classical' if engine=='thesis_gnn' else engine)
     else:
         legacy={'status':'no_observations','years':document['years'],
                 'engine':'stage5_classical' if document['method']=='old' else 'semantic_image_evidence',
@@ -340,6 +342,27 @@ def detect_classical(graph,context):
     margin=boundary_margin(context)
     frame=load_comparison(graph,context);evidence=detect_evidence(frame,policy,boundary_tolerance=margin)
     result=build_change_catalog(graph,frame,evidence,policy,reviewed_targets=context.options.get('reviewed_targets'))
+    if engine=='stage5_classical':
+        # Convert original Stage 5 class IDs and fields once for the shared viewer.
+        events=[]
+        for event in legacy['events']:
+            kind={'appeared':'gain','constructed':'gain','disappeared':'loss',
+                  'demolished':'loss','removed':'loss','expanded':'expansion',
+                  'contracted':'contraction','reconfigured':'reconfiguration'}.get(event['relation'])
+            klass=OLD_TO_CANONICAL.get(event['class_id'],0)
+            if kind is None or klass==0:continue
+            direction='gain' if kind in ('gain','expansion') else 'loss'
+            task=CLASSES[klass]+'_'+direction
+            geometry=event['geometry_world']
+            events.append({'event_id':event['event_id'],'kind':kind,'class_id':klass,
+                'source_class':klass,'target_class':klass,'geometry':geometry,
+                'area':shape(geometry).area,'area_units':result['transition_matrix']['area_units'],
+                'status':'candidate','season_sensitive':klass in (3,4,5),
+                'source_nodes':event['source_node_ids'],'target_nodes':event['target_node_ids'],
+                'related_tasks':[task],'descriptors':{},'engine':'stage5_classical',
+                'original_relation':event['relation']})
+        result.update(engine='stage5_classical',events=events,compound_events=[],derived_edges=[],
+            target_definition='Old Stage 5 polygon extent events; review candidates, not verified physical changes')
     result.update(legacy_engine=legacy['engine'],legacy_report=str(legacy_path),
         effective_boundary_tolerance=margin,
         measurement_policy='Metric thresholds in metres/metres squared' if frame['grid'].units=='metres' else

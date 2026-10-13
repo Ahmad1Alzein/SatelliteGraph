@@ -1,5 +1,4 @@
-"""Thesis dashboard: every page renders without exceptions on the real artifacts (skipped when they are absent),
-the original image-comparison tool stays mounted unchanged, and evidence labelling is applied."""
+"""Thesis dashboard pages, integrated pipeline workspace and evidence labels."""
 from pathlib import Path
 
 import pytest
@@ -26,9 +25,10 @@ def test_class_palette_matches_original_study():
     assert D.COLORS[1] == (230, 57, 70) and D.CLASSES[7] == "paved_developed" and D.hexcolor("building") == "#e63946"
 
 
-def test_dashboard_mounts_original_tool_unchanged():
+def test_dashboard_mounts_integrated_pipeline_workspace():
     text = (ROOT / "thesis_dashboard.py").read_text(encoding="utf-8")
-    assert 'st.Page("streamlit_app.py"' in text
+    assert 'st.Page(P + "pipelines.py"' in text
+    assert not (ROOT/'streamlit_app.py').exists()
     for page in PAGES:
         assert (ROOT / "dashboard" / "pages" / f"{page}.py").is_file()
 
