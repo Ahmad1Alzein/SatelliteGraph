@@ -4,7 +4,11 @@ Run:  python -m streamlit run thesis_dashboard.py
 The selectable pipeline workspace is part of this dashboard.
 """
 from pathlib import Path
+import os
 import sys
+
+# Configure TensorFlow before any model libraries are imported.
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import streamlit as st
 
