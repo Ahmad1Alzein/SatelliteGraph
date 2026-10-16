@@ -1,9 +1,18 @@
 """Shared event filtering and local paired grid export for the review page."""
+import math
 from PIL import Image,ImageDraw
 from .change_contracts import change_label
 from .reports.changes import event_crops,_event_text,_text_block
 from .reports.common import font
 from shapely.geometry import shape
+
+
+def valid_score(value):
+    """Missing or invalid scores stay unknown; never round or inflate support."""
+    if value is None or isinstance(value,bool):return None
+    try:value=float(value)
+    except (TypeError,ValueError):return None
+    return value if math.isfinite(value) and 0<=value<=1 else None
 
 
 def major_change(event,document,native_pixel=1.):
@@ -33,6 +42,17 @@ def major_change(event,document,native_pixel=1.):
             persistent=min(1.,sum(e.get('fraction_source',0) if gid==e['source'] else e.get('fraction_target',0) for e in matches))
             if fraction>=.6 and persistent<.15:return result(True,'Most of a building footprint changed; no substantial building match')
         return result(False,'Building outline, size variation or unresolved match')
+    # A thick patch can still be a very small relabelled part of a landscape.
+    # Annual nodes partition each image: compare the changed intersection with
+    # all participating parent area on each side, not the newly split patch alone.
+    nodes={n['id']:n for n in document['nodes']};fractions=[]
+    for side in ('source_nodes','target_nodes'):
+        parents=[shape(nodes[g]['geometry']) for g in dict.fromkeys(event.get(side,[]))
+            if g in nodes and nodes[g].get('geometry')]
+        area=sum(p.area for p in parents)
+        if area:fractions.append(sum(geometry.intersection(p).area for p in parents)/area)
+    if fractions and min(fractions)<.1:
+        return result(False,'Small landscape patch: less than 10% of participating regions on one side')
     return result(True,'Substantial road or land-cover footprint')
 
 
@@ -51,23 +71,36 @@ def event_rows(events,document,scores,*,native_pixel=1.,external_predictions=Fal
     for event in events:
         event=display_event(event,scores,external_predictions=external_predictions)
         gids=event.get('source_nodes',[])+event.get('target_nodes',[])
-        confidence=[nodes[g]['confidence'] for g in gids if g in nodes and 'confidence' in nodes[g]]
-        probabilities=[float(scores[g,t]['probability']) for g in gids for t in event.get('related_tasks',[]) if (g,t) in scores]
+        def side_score(key):
+            values=[valid_score(nodes[g].get('confidence')) for g in event.get(key,[]) if g in nodes]
+            return min((v for v in values if v is not None),default=None)
+        before=side_score('source_nodes');after=side_score('target_nodes')
+        confidence=[v for v in (before,after) if v is not None]
+        probabilities=[valid_score(scores[g,t].get('probability')) for g in gids
+            for t in event.get('related_tasks',[]) if (g,t) in scores]
+        probabilities=[p for p in probabilities if p is not None]
+        segment=min(confidence) if confidence else None
+        # Presentation copy only: scientific event records and raw probabilities
+        # remain intact, while downloaded grids share the displayed score.
+        event={**event,'segment_confidence':segment}
         rows.append({'event_id':event['event_id'],'type':_event_text(event,{})[0][0],'status':event.get('status','candidate'),
             'classes':list({event[k] for k in ('class_id','source_class','target_class') if k in event}),
             'area':float(event.get('area',0)),'area_units':event.get('area_units','pixels squared'),
-            'segment_confidence':min(confidence) if confidence else None,
+            'segment_confidence':segment,'before_segment_confidence':before,'after_segment_confidence':after,
             'gnn_score':max(probabilities) if probabilities else None,'event':event,
             'major_change':major_change(event,document,native_pixel)})
     return rows
 
 
 def filter_rows(rows,*,statuses=None,classes=None,min_area=0,min_segment_confidence=0,min_gnn_score=None,major_only=False):
-    return [r for r in rows if (statuses is None or r['status'] in statuses)
+    selected=[r for r in rows if (statuses is None or r['status'] in statuses)
         and (not major_only or r.get('major_change',{}).get('include',False))
         and (classes is None or set(classes)&set(r['classes'])) and r['area']>=min_area
-        and (min_segment_confidence<=0 or r['segment_confidence'] is not None and r['segment_confidence']>=min_segment_confidence)
-        and (min_gnn_score is None or r['gnn_score'] is not None and r['gnn_score']>=min_gnn_score)]
+        and (min_segment_confidence<=0 or valid_score(r['segment_confidence']) is not None and valid_score(r['segment_confidence'])>=min_segment_confidence)
+        and (min_gnn_score is None or valid_score(r['gnn_score']) is not None and valid_score(r['gnn_score'])>=min_gnn_score)]
+    # Stable ordering over the whole filtered collection, before pagination.
+    return sorted(selected,key=lambda r:valid_score(r['segment_confidence'])
+        if valid_score(r['segment_confidence']) is not None else -1,reverse=True)
 
 
 def grid_image(frame,events,scores,*,columns=2,panel_size=(224,224)):

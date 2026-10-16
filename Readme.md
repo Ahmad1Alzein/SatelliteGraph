@@ -21,6 +21,19 @@ under `artifacts/image_comparisons/`. The pipeline workspace is part of the thes
 dashboard; there is one Streamlit entry point. See [pipeline options](docs/pipeline-options.md)
 for installation, placement requirements, native CLI commands and resume behavior.
 
+Crop results are sorted by segmentation score from highest to lowest across all
+pages. **Minimum segmentation score** filters semantic class support: each region
+uses its mean class probability, and a change uses the lowest available score
+among its before/after regions. Bare-ground and water colour rules can produce
+low semantic scores; their separate rule support does not inflate this value.
+GNN change scores appear only when the original model produced probabilities.
+
+**Focus on major changes** also hides landscape patches below 10% of participating
+region area on either date. To inspect every candidate, include weak/seasonal
+differences, turn off this focus, select all statuses and classes, set both area
+and segmentation minima to zero, and leave the GNN score filter off. These review
+controls preserve all saved candidates and model results.
+
 The retained GNN is `pipelines/legacy_building_stgnn/original/gnn_change.py`, class
 `RGNN`, integrated by contributor Roaa Elmir in commit `a9f9df7`. It is project
 model code, with no downloaded pretrained weights or saved weights checkpoint.

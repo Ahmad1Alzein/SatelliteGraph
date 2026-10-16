@@ -31,12 +31,13 @@ def event_crops(frame,event,size=(224,224)):
 
 
 def _scores(result):
+    from ..preview import valid_score
     rows={}
     for name in ('predictions','evaluation_predictions'):
         path=(result or {}).get(name)
         if path and Path(path).is_file():
             for row in pd.read_csv(path).to_dict('records'):
-                if row.get('task') in (*TASKS,'built_over') and pd.notna(row.get('probability')):
+                if row.get('task') in (*TASKS,'built_over') and valid_score(row.get('probability')) is not None:
                     rows[row['gid'],row['task']]=row
     return rows
 
@@ -83,6 +84,7 @@ def _original_score_view(frame,document,scores,*,probabilities):
 
 
 def _event_text(event,scores):
+    from ..preview import valid_score
     title=change_label(event);descriptors=[]
     weak=event.get('image_evidence_status',event.get('status')) in ('candidate','season_sensitive')
     if weak and event.get('kind')=='conversion':title='Class-label difference: '+title
@@ -95,11 +97,14 @@ def _event_text(event,scores):
     if descriptors:title+=' | '+'; '.join(dict.fromkeys(descriptors))
     badge=status_label(event.get('status','candidate'))
     texts=[title,badge,f'{event.get("area",0):,.1f} {event.get("area_units","pixels squared")}']
+    if 'segment_confidence' in event:
+        score=event['segment_confidence']
+        texts.append('Segmentation score: '+('unavailable' if score is None else f'{score:.3f}'))
     if event.get('image_evidence_status'):texts.append('Image evidence: '+status_label(event['image_evidence_status']))
     related=[]
     for task in event.get('related_tasks',[]):
         for gid in event.get('source_nodes',[])+event.get('target_nodes',[]):
-            if (gid,task) in scores:related.append(scores[gid,task])
+            if (gid,task) in scores and valid_score(scores[gid,task].get('probability')) is not None:related.append(scores[gid,task])
     if related:
         best=max(related,key=lambda r:r['probability']);held=best.get('probability_source')=='held_out'
         provenance='held out' if held else 'saved checkpoint inference' if best.get('status')=='inference' else 'trained on this area'
@@ -196,9 +201,14 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
     document=read_json(graph.paths['graph']);scores=_scores(gnn_result);tasks=_task_rows(gnn_result,scores)
     events=catalog.get('events',[]);predicted=_predicted_events(document,catalog,scores)
     if len({e['event_id'] for e in events})!=len(events):raise ValueError('Duplicate canonical event IDs')
+    from ..preview import grid_image,event_rows,filter_rows
+    external=(gnn_result or {}).get('evaluation',{}).get('status')=='external_annotated_subset'
+    review_rows=filter_rows(event_rows(events+predicted,document,scores,
+        native_pixel=frame.get('source_pixel_size',abs(frame['grid'].affine[0])),external_predictions=external))
+    presented=[r['event'] for r in review_rows]
     # Plan the complete sheet before allocating it. No event is silently truncated.
     width=960;cell_width=460;row_plans=[];cell_specs=[]
-    for event in events+predicted:
+    for event in presented:
         texts,badge=_event_text(event,scores);lines=_text_block(texts,cell_width-12)
         cell_specs.append((event,lines,badge,224+32+len(lines)*22+16))
     for i in range(0,len(cell_specs),2):row_plans.append(cell_specs[i:i+2])
@@ -255,19 +265,15 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
             for image in thumbnails:body.paste(image,(0,offset));offset+=image.height+16
             paths[name]=directory/(name+'.png');body.save(paths[name])
     report_dir=directory/'changes';report_dir.mkdir(exist_ok=True)
-    from ..preview import grid_image,major_change,display_event
     grid_pages=[]
-    for offset in range(0,len(events+predicted),12):
-        selected=(events+predicted)[offset:offset+12];page=offset//12+1
+    for offset in range(0,len(presented),12):
+        selected=presented[offset:offset+12];page=offset//12+1
         grid,_=grid_image(frame,selected,scores)
         path=report_dir/f'change_grid_{page:03d}.png';grid.save(path)
         paths[f'change_grid_{page:03d}']=path
         grid_pages.append({'path':str(path.relative_to(context.output)),
             'event_ids':[e['event_id'] for e in selected]})
-    external=(gnn_result or {}).get('evaluation',{}).get('status')=='external_annotated_subset'
-    focus_events=[display_event(e,scores,external_predictions=external) for e in events+predicted]
-    major=[e for e in focus_events if e.get('status') in ('reliable','predicted')
-        and major_change(e,document,frame.get('source_pixel_size',abs(frame['grid'].affine[0])))['include']]
+    major=[r['event'] for r in filter_rows(review_rows,statuses=['reliable','predicted'],major_only=True)]
     major_pages=[]
     for offset in range(0,max(1,len(major)),12):
         selected=major[offset:offset+12];page=offset//12+1
@@ -275,7 +281,7 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
         else:
             image=Image.new('RGB',(960,260),'white');draw=ImageDraw.Draw(image)
             draw.text((24,24),'No strong major changes passed the current evidence gates.',font=font(24),fill='#182331')
-            text='Raw class differences remain in the complete candidate grids. Small outline/size changes and vegetation subclass swaps are excluded from this focused view. A GNN score is a model prediction, not verified accuracy.'
+            text='Raw class differences remain in the complete candidate grids. Thin outlines, vegetation subclass swaps and landscape patches below 10% of participating regions on either date are excluded from this focus. A GNN score is a model prediction, not verified accuracy.'
             for i,line in enumerate(wrap_text(text,900,size=18)):draw.text((24,85+i*26),line,font=font(18),fill='#182331')
         key='major_changes' if page==1 else f'major_changes_{page:03d}'
         path=directory/(key+'.png');image.save(path);paths[key]=path
@@ -284,8 +290,10 @@ def render_change_results(graph,context,frame,catalog,gnn_result):
         'years':frame['years'],'tasks':tasks,'crops':crops,'predicted_crops':predicted_crops,
         'compound_groups':compound,'structural_observations':structures,'transition_matrix':transition_record,
         'required_pixels':required,'canvas_size':[width,height],'grid_pages':grid_pages,
+        'review_order':'segmentation_score_descending; unknown last; stable ties',
+        'segmentation_score':'Lowest available mean semantic class probability among participating before/after segments',
         'major_change_focus':{'shown':len(major),'pages':major_pages,
-            'policy':'Strong image evidence or GNN prediction; substantial interior; building whole-object coverage >=60%, same-class match <15%; vegetation subtype swaps excluded'},
+            'policy':'Strong image evidence or GNN prediction; substantial interior; building whole-object coverage >=60%, same-class match <15%; land-cover footprint >=10% of participating regions on each known side; vegetation subtype swaps excluded'},
         'images':{name:str(path.relative_to(context.output)) for name,path in paths.items() if path.suffix=='.png'}})
     save_manifest(report_dir,{'index':paths['change_index']},stage='changes')
     return paths

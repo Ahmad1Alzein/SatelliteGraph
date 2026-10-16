@@ -6,6 +6,7 @@ published leave-one-tile-out results. No experimental multi-head model is used.
 """
 import ast
 from functools import lru_cache
+import math
 import warnings
 
 import numpy as np
@@ -45,8 +46,16 @@ def original_inputs(document):
     rows = []
     for i, n in enumerate(nodes):
         hsv = n.get('hsv_mean', [0., 0., 0.])
+        confidence = n['confidence']
+        support = n.get('rule_support')
+        # The original feature uses RGB-rule support for these classes. Keep
+        # the semantic score on the source node for review and target gates.
+        if (n.get('rgb_rule') is True and n['class_id'] in (6, 8)
+                and isinstance(support, (int, float)) and not isinstance(support, bool)
+                and math.isfinite(support) and 0 <= support <= 1):
+            confidence = support
         row = dict(segment_id=i, class_id=n['class_id'], area_m2=max(n['area'], 1e-9),
-            perimeter_m=max(n['perimeter'], 1e-9), confidence=n['confidence'],
+            perimeter_m=max(n['perimeter'], 1e-9), confidence=confidence,
             rgb_rule=bool(n.get('rgb_rule', False)),
             node_x=n['position'][0], node_y=n['position'][1],
             compactness=n.get('compactness', 0.), solidity=n.get('solidity', 0.),
@@ -82,9 +91,10 @@ def original_inputs(document):
         rel = ('contained_in' if e['relation'] == 'contained_in' else 'identity') if e.get('edge_role') == 'primary' else 'overlap'
         shift = e.get('roof_shift', [0., 0.])
         a, b = nodes[index[e['source']]], nodes[index[e['target']]]
+        fa, fb = float(e.get('fraction_source', 0.)), float(e.get('fraction_target', 0.))
         edges.append(dict(src=index[e['source']], dst=index[e['target']], relation='temporal_'+rel,
-            iou=e.get('iou', 0.), frac_2013=e.get('fraction_source', 0.),
-            frac_2023=e.get('fraction_target', 0.), overlap_score=e.get('overlap_score', 0.),
+            iou=e.get('iou', 0.), frac_2013=fa, frac_2023=fb,
+            overlap_score=e.get('overlap_score', math.sqrt(max(0., fa*fb))),
             shared_m2=e.get('shared_area', 0.), class_agreement=float(a['class_id'] == b['class_id']),
             confidence_ord={'high': 2., 'medium': 1., 'low': 0.}.get(e.get('confidence'), 1.),
             frame_roof=float(e.get('frame') == 'roof'), roof_shift_dx_m=shift[0], roof_shift_dy_m=shift[1]))

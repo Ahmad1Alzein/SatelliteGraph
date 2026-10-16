@@ -65,9 +65,13 @@ def connected_region_view(artifact):
     paths['labels']=directory/'segment_ids.tif';paths['lineage']=directory/'lineage.json'
     write_raster(paths['labels'],result,artifact.grid,nodata=0);atomic_json(paths['lineage'],lineage)
     classes=read_band(paths['classes']);probability=np.load(paths['probabilities'],allow_pickle=False)
+    rule=read_band(paths['rule_support']) if 'rule_support' in paths else None
     paths['nodes']=directory/'nodes.csv'
     pd.DataFrame([{'segment_id':i,'class_id':int(classes[result==i][0]),'pixels':int((result==i).sum()),
-                  'confidence':float(probability[int(classes[result==i][0]),result==i].mean())} for i in range(1,next_id+1)]).to_csv(paths['nodes'],index=False)
+                  'confidence':float(probability[int(classes[result==i][0]),result==i].mean()),
+                  'rgb_rule':None if rule is None else int(classes[result==i][0]) in (6,8),
+                  'rule_support':None if rule is None else float(rule[result==i].mean()) if int(classes[result==i][0]) in (6,8) else 0.}
+                 for i in range(1,next_id+1)]).to_csv(paths['nodes'],index=False)
     view=replace(artifact,directory=directory,paths=paths,lineage=lineage)
     atomic_json(directory/'artifact.json',view);save_manifest(directory,paths,connected_view=True)
     return view

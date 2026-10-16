@@ -3,8 +3,8 @@ from pathlib import Path
 import hashlib
 import json
 
-GRAPH_PROFILE = 'directional-all-class.v1'
-RENDER_PROFILE = 'original-building-stgnn-and-stage5-reports.v6'
+GRAPH_PROFILE = 'directional-all-class.v2'
+RENDER_PROFILE = 'original-building-stgnn-and-stage5-reports.v7'
 REGISTRATION_PROFILE = 'guided-current-images-local-consensus.v2'
 
 
@@ -92,7 +92,7 @@ def validate_resume(state: dict, stage: str, fingerprint: str) -> None:
 
 def change_fingerprint(options: dict) -> str:
     settings={k:options.get(k) for k in ('gnn_checkpoint','gnn_epochs','gnn_hidden','boundary_tolerance','change_policy','reviewed_targets')}
-    settings['algorithm']='original-thesis-stgnn-and-stage5-classical.v1'
+    settings['algorithm']='original-thesis-stgnn-and-stage5-classical.v2'
     files=[]
     for key in ('change_policy','reviewed_targets'):
         if options.get(key):

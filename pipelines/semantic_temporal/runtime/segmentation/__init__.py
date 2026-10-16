@@ -29,6 +29,10 @@ def segment_tile(tile,context,*,models=None):
     labels,classes,sources,probabilities,image,rule,_,merge_log,shape_probability,max_probability=segment(rgb,area,log,P=settings,
         models=models or load_models(context),valid=observed,building_settings=building)
     labels[~observed]=0
+    # Keep RGB-rule provenance separate from the model's semantic probabilities.
+    # The original feature contract marks generated bare/water classes as rule
+    # based whenever this support raster is available, even at zero support.
+    rule=np.asarray(rule,dtype=np.float32).copy();rule[~observed]=0
     # Preserve unknown observations rather than folding them into bare soil/land.
     unknown=observed & (probabilities.argmax(0)==0)
     labels[unknown]=0
@@ -51,14 +55,17 @@ def segment_tile(tile,context,*,models=None):
                     parent={'year':tile.year,'tile':tile.key,'segment':int(original),'method':'new'}
                     lineage[str(new)]=[parent]
                     rows.append({'segment_id':new,'class_id':target,'pixels':int(piece.sum()),'area':float(piece.sum()*area),
-                                 'confidence':float(probabilities[target,piece].mean()),'source':sources.get(int(original),'observed_fallback')})
+                                 'confidence':float(probabilities[target,piece].mean()),'source':sources.get(int(original),'observed_fallback'),
+                                 'rgb_rule':target in (6,8),'rule_support':float(rule[piece].mean()) if target in (6,8) else 0.})
     if np.any(observed&(result==0)): raise ValueError('Segmentation failed observed-pixel coverage')
     directory=context.output/'segmentation'/str(tile.year)/tile.key
     paths={k:directory/name for k,name in {'labels':'segment_ids.tif','classes':'segment_classes.tif','valid':'valid_mask.tif',
-          'probabilities':'probabilities.npy','image':'rgb.tif','nodes':'nodes.csv','lineage':'lineage.json','validation':'validation.json','merges':'merge_log.csv'}.items()}
+          'probabilities':'probabilities.npy','image':'rgb.tif','nodes':'nodes.csv','lineage':'lineage.json','validation':'validation.json','merges':'merge_log.csv',
+          'rule_support':'rule_support.tif'}.items()}
     outgrid=replace(grid,affine=tuple(transform)[:6],physical_pixel_size=(pixel,pixel) if grid.units=='metres' else None)
     write_raster(paths['labels'],result,outgrid,nodata=0);write_raster(paths['classes'],class_map,outgrid,nodata=255)
     write_raster(paths['valid'],observed.astype(np.uint8),outgrid,nodata=0);write_raster(paths['image'],image.transpose(2,0,1),outgrid)
+    write_raster(paths['rule_support'],rule,outgrid)
     original,_,_=prepare_tile(tile,context,model=False)
     original=cv2.resize(original,shape[::-1],interpolation=cv2.INTER_LINEAR)
     original[~observed]=0;paths['original_image']=directory/'original_rgb.tif'

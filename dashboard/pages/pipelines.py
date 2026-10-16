@@ -1,7 +1,5 @@
 """Selectable pipeline workspace, mounted by thesis_dashboard.py."""
 from pathlib import Path
-import io
-import math
 import os
 import subprocess
 import sys
@@ -15,11 +13,12 @@ import pandas as pd
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from pipelines.semantic_temporal.runtime.storage import read_json,verify_result_manifest
-from pipelines.semantic_temporal.runtime.change_contracts import CLASS_LABELS,EDGE_LABELS,TASKS,status_label
+from pipelines.semantic_temporal.runtime.change_contracts import CLASS_LABELS,EDGE_LABELS
 from pipelines.semantic_temporal.runtime.reports.common import class_color,EDGE_STYLES
-from pipelines.semantic_temporal.runtime.reports.changes import event_crops,_scores,_predicted_events
-from pipelines.semantic_temporal.runtime.preview import event_rows,filter_rows,grid_image
+from pipelines.semantic_temporal.runtime.reports.changes import _scores,_predicted_events
+from pipelines.semantic_temporal.runtime.preview import event_rows
 from dashboard.pipeline_controls import METHOD_LABELS,pipeline_command
+from src.pipeline_state import RENDER_PROFILE
 
 st.set_page_config(page_title='SatelliteGraph | Image comparison',layout='wide')
 st.title('SatelliteGraph · Image comparison')
@@ -38,7 +37,7 @@ def launch(command,output):
 
 
 @st.cache_data(show_spinner='Reading verified results…',max_entries=2)
-def bundle(output,stamp):
+def bundle(output,stamp,review_profile):
     from pipelines.semantic_temporal.runtime.context import load_context
     from pipelines.semantic_temporal.runtime.comparison import load_comparison
     from pipelines.semantic_temporal.runtime.contracts import TemporalArtifact
@@ -135,7 +134,7 @@ try:
     if change_view_status(output,state)=='archived':
         show_archived_results(output,state)
         st.stop()
-    context,frame,document,catalog,result,scores,rows=bundle(str(output),(output/'run.json').stat().st_mtime_ns)
+    context,frame,document,catalog,result,scores,rows=bundle(str(output),(output/'run.json').stat().st_mtime_ns,RENDER_PROFILE)
 except Exception as exc:
     st.error(f'Results are not ready: {exc}')
     st.stop()
@@ -153,55 +152,9 @@ st.caption(' · '.join(method_labels.values()))
 tabs=st.tabs(['Changes','Segmentation','Graphs','Matching','GNN training'])
 
 with tabs[0]:
-    st.subheader('Local before / after crops')
-    st.caption('Yellow outlines mark the same change footprint. Crops use native original RGB, local context and at most 2× enlargement. No artificial sharpening.')
-    show_weak=st.checkbox('Include weak and seasonal class differences',value=False,
-        help='Raw segmentation differences are review candidates, not confirmed physical changes.')
-    major_only=st.checkbox('Focus on major changes',value=True,
-        help='Show whole-building appearance/disappearance and substantial road or land-cover changes. Hide thin outlines, small size changes and vegetation subclass swaps.')
-    allowed=sorted({r['status'] for r in rows}) if show_weak or selected_methods['change']=='classical' else sorted({r['status'] for r in rows}&{'reliable','predicted'})
-    filter_cols=st.columns(3)
-    statuses=filter_cols[0].multiselect('Evidence status',sorted({r['status'] for r in rows}),
-        default=allowed,format_func=status_label,key='statuses_'+str(show_weak))
-    classes=filter_cols[1].multiselect('Classes',list(range(1,9)),default=list(range(1,9)),format_func=lambda k:CLASS_LABELS[k])
-    area=filter_cols[2].number_input('Minimum change area',min_value=0.,value=0.,step=10.)
-    has_scores=any(r['gnn_score'] is not None for r in rows)
-    use_score=st.checkbox('Filter by GNN change score',disabled=not has_scores)
-    threshold=st.slider('Minimum GNN change score',0.,1.,.5,.05,disabled=not(use_score and has_scores))
-    if has_scores:
-        st.caption('Higher GNN change scores indicate greater model support for a change. Evidence labels distinguish strong image evidence from weak or seasonal candidates.')
-        if original_run:st.caption('These scores come from a fit trained on this area; they are not independently tested confidence or accuracy.')
-    if not has_scores:st.info('This comparison has no GNN scores. Classical runs use rule-based events; the original ST-GNN needs reliable changed and unchanged training targets.')
-    filtered=filter_rows(rows,statuses=statuses,classes=classes,min_area=area,
-        min_gnn_score=threshold if use_score and has_scores else None,major_only=major_only)
-    st.write(f'{len(filtered):,} of {len(rows):,} changes shown · {dict(Counter(r["status"] for r in filtered))}')
-    st.dataframe(pd.DataFrame([{'Class':CLASS_LABELS[k],
-        'Visible changes':sum(k in r['classes'] for r in filtered),
-        'Image-evidence candidates':sum(k in r['classes'] for r in rows),
-        'GNN scope / status':('Rule-based run; no GNN' if selected_methods['change']=='classical' else
-            'Historical experimental scores' if retired_run else
-            'Later building gain: '+result.get('head_status',{}).get('building_gain',{}).get('status','unavailable') if k==1 else
-            'Earlier land built over: '+result.get('head_status',{}).get('built_over',{}).get('status','unavailable'))}
-        for k in range(1,9)]),hide_index=True,width='stretch')
-    if not filtered:
-        st.info('No changes pass the current filters. Weak or seasonal differences can be inspected with the checkbox above; they are not confirmed changes.')
-    pages=max(1,math.ceil(len(filtered)/12));page=st.number_input('Page (12 changes per page)',min_value=1,max_value=pages,value=1)
-    visible=filtered[(page-1)*12:page*12]
-    for start in range(0,len(visible),2):
-        for col,row in zip(st.columns(2),visible[start:start+2]):
-            with col:
-                with st.container(border=True):
-                    st.markdown(f'**{row["type"]}** · {status_label(row["status"])}')
-                    panels,_=event_crops(frame,row['event'],(256,256))
-                    for side,panel,title in zip(st.columns(2),panels,['Before','After']):side.image(panel,caption=title,width='stretch')
-                    gnn='unavailable' if row['gnn_score'] is None else f'{row["gnn_score"]:.3f}'
-                    st.caption(f'{row["area"]:,.1f} {row["area_units"]} · GNN change score: {gnn}')
-                    st.caption(row['event_id'])
-    if visible:
-        grid,_=grid_image(frame,[r['event'] for r in visible],scores);buffer=io.BytesIO();grid.save(buffer,format='PNG')
-        st.download_button('Download this page as one grid PNG',buffer.getvalue(),file_name=f'change_grid_{page:03d}.png',mime='image/png')
-    with st.expander('Change data'):
-        st.dataframe(pd.DataFrame([{k:v for k,v in r.items() if k not in ('event','segment_confidence')} for r in filtered]),width='stretch')
+    from dashboard.change_review import render_crop_review
+    render_crop_review(frame,result,scores,rows,selected_methods,
+        original_run=original_run,retired_run=retired_run)
 
 with tabs[1]:
     st.subheader('Segmentation and class data')

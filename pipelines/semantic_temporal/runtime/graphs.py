@@ -50,13 +50,15 @@ def _old_tile(labels,classes,probabilities,key,grid,offset=(0,0),source_grid=Non
     return document,geometries
 
 
-def _row(ident,klass,geom,rgb,probabilities,members,year,evidence):
+def _row(ident,klass,geom,rgb,probabilities,members,year,evidence,*,rule_support=None):
     hsv=cv2.cvtColor(rgb.reshape(-1,1,3),cv2.COLOR_RGB2HSV).reshape(-1,3) if len(rgb) else np.zeros((1,3))
     metrics=shape_metrics(geom);point=geom.representative_point()
     row={'id':ident,'year':year,'class_id':klass,'class':CLASSES[klass],'area':float(geom.area),
          'perimeter':float(geom.length),'geometry':mapping(geom),'position':[point.x,point.y],
          'centroid':[geom.centroid.x,geom.centroid.y],'members':members,
          'confidence':float(probabilities[klass]),'full_probability_evidence':bool(evidence),
+         'rgb_rule':None if rule_support is None else klass in (6,8),
+         'rule_support':None if rule_support is None else float(rule_support) if klass in (6,8) else 0.,
          'image_evidence':len(rgb)>0,'probabilities':probabilities.tolist(),
          **{k:v for k,v in metrics.items() if k!='perimeter_m'}}
     row['rgb_mean']=rgb.mean(0).tolist() if len(rgb) else [0.,0.,0.]
@@ -148,6 +150,7 @@ def build_tile_graph(artifact,method,context):
         from .adapters import connected_region_view
         artifact=connected_region_view(artifact)
     labels=read_band(artifact.paths['labels']);classes=read_band(artifact.paths['classes']);probabilities=np.load(artifact.paths['probabilities'],allow_pickle=False)
+    rule=read_band(artifact.paths['rule_support']) if 'rule_support' in artifact.paths else None
     image=None
     if 'image' in artifact.paths:
         with rasterio.open(artifact.paths['image']) as src: image=src.read().transpose(1,2,0)
@@ -160,7 +163,8 @@ def build_tile_graph(artifact,method,context):
         ident=record['instance_id'];mask=labels==ident;klass=int(classes[mask][0]);node_id=record['node_id'];lookup[ident]=node_id
         geom=transform_geometry(shape(record['geometry']),Affine(*artifact.grid.affine))
         rgb=image[mask] if image is not None else np.zeros((0,3),np.uint8)
-        nodes.append(_row(node_id,klass,geom,rgb,probabilities[:,mask].mean(1),artifact.lineage.get(str(ident),[]),artifact.year,evidence))
+        nodes.append(_row(node_id,klass,geom,rgb,probabilities[:,mask].mean(1),artifact.lineage.get(str(ident),[]),artifact.year,evidence,
+                          rule_support=float(rule[mask].mean()) if rule is not None else None))
     touches=[(lookup[e['source_instance_id']],lookup[e['target_instance_id']],e['shared_boundary_length_projected'] if artifact.grid.crs else e['shared_boundary_length_pixels']*math.sqrt(abs(Affine(*artifact.grid.affine).determinant))) for e in old['edges']]
     edges=_edges(nodes,touches,method,artifact.grid.units)
     graph=_persist(context.output/'graphs'/method/str(artifact.year)/artifact.tile_key,nodes,edges,artifact.grid,artifact.year,method,segmentation_artifact=str(artifact.directory/'artifact.json'))
@@ -192,7 +196,8 @@ def combine_year_graphs(graphs,context):
         if 'image' in artifact.paths:
             with rasterio.open(artifact.paths['image']) as src:rgb=src.read().transpose(1,2,0)
         full=not ('validation' in artifact.paths and read_json(artifact.paths['validation']).get('probability_evidence')=='assigned_label_confidence_only')
-        inputs[key]=(artifact,classes,prob,rgb,full)
+        rule=read_band(artifact.paths['rule_support']) if 'rule_support' in artifact.paths else None
+        inputs[key]=(artifact,classes,prob,rgb,full,rule)
     from .context import old_configuration
     cfg=select_stage4_config(old_configuration(context));matches=_overlap_candidates(tiles,cfg['overlap']);union,accepted=_resolve_matches(tiles,matches);_assign_ownership(tiles)
     old_nodes,geoms,roots,dropped=_build_combined_nodes(tiles,union,str(graphs[0].year))
@@ -201,17 +206,24 @@ def combine_year_graphs(graphs,context):
     validate_combined_graph(old)
     nodes=[]
     for record,geom in zip(old_nodes,geoms):
-        rgbs=[];probs=[];members=[];full=True
+        rgbs=[];probs=[];members=[];full=True;rule_known=True;rule_sum=0.;rule_pixels=0
         for member in record['members']:
-            tile=next(t for t in tiles if t.tile_id==member['tile_id']);artifact,classes,prob,image,evidence=inputs[tile.tile_id]
+            tile=next(t for t in tiles if t.tile_id==member['tile_id']);artifact,classes,prob,image,evidence,rule=inputs[tile.tile_id]
             mask=tile.ownership&(tile.instance_map==member['instance_id'])
             if image is not None:rgbs.append(image[mask])
             probs.append(prob[:,mask]);members.extend(artifact.lineage.get(str(member['instance_id']),[]))
             full &= evidence
+            count=int(mask.sum())
+            if count:
+                if rule is None:rule_known=False
+                else:rule_sum+=float(rule[mask].sum(dtype=np.float64));rule_pixels+=count
         klass={v:k for k,v in CANONICAL_TO_OLD.items()}[record['segment_type']['id']]
         rgb=np.concatenate(rgbs) if rgbs else np.zeros((0,3),np.uint8)
         probability=np.concatenate(probs,axis=1).mean(1)
-        nodes.append(_row(record['node_id'],klass,transform_geometry(geom,reference),rgb,probability,members,graphs[0].year,full))
+        # Only owned pixels count. A missing member's provenance cannot be
+        # invented from the class, including when other members have support.
+        nodes.append(_row(record['node_id'],klass,transform_geometry(geom,reference),rgb,probability,members,graphs[0].year,full,
+                          rule_support=rule_sum/rule_pixels if rule_known and rule_pixels else None))
     scale=math.sqrt(abs(reference.determinant));touches=[(e['source'],e['target'],e['shared_boundary_length_pixels']*scale) for e in old_edges]
     edges=_edges(nodes,touches,graphs[0].method,base.units)
     destination=context.output/'annual'/graphs[0].method/str(graphs[0].year)
