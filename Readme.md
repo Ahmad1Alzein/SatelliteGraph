@@ -1,4 +1,20 @@
-# SatelliteGraph
+## Academic Research — M2 Artificial Intelligence Theses
+
+SatelliteGraph is a shared research and development framework supporting two complementary Master's theses at the Lebanese University, Faculty of Sciences, Professional Master in Artificial Intelligence (2025–2026).
+
+**Thesis 1 — Ahmad Hussein Alzein**
+
+*Graph-Based Representation and Temporal Unification of Satellite Imagery for Robust Environmental Modeling*
+
+**Thesis 2 — Roaa ElMir**
+
+*Graph Neural Network-Driven Change Detection in Multi-Temporal Satellite Graphs for Environmental Monitoring*
+
+Both theses share the SatelliteGraph technical foundation, including satellite image preprocessing, semantic segmentation, spatial graph construction, annual graph integration, and temporal correspondence.
+
+The research perspectives are complementary: Ahmad's thesis emphasizes graph-based representation and temporal unification, while Roaa's thesis focuses on graph neural networks and spatiotemporal change detection.
+
+The repository documents the shared implementation, experimental workflows, and reproducibility requirements supporting both theses.
 
 SatelliteGraph compares two dates of satellite imagery through selectable
 segmentation, spatial graph and change-detection methods. Start the thesis dashboard:
