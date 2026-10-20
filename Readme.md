@@ -1,4 +1,20 @@
-# SatelliteGraph
+## Academic Research — M2 Artificial Intelligence Theses
+
+SatelliteGraph is a shared research and development framework supporting two complementary Master's theses at the Lebanese University, Faculty of Sciences, Professional Master in Artificial Intelligence (2025–2026).
+
+**Thesis 1 — Ahmad Hussein Alzein**
+
+*Graph-Based Representation and Temporal Unification of Satellite Imagery for Robust Environmental Modeling*
+
+**Thesis 2 — Roaa ElMir**
+
+*Graph Neural Network-Driven Change Detection in Multi-Temporal Satellite Graphs for Environmental Monitoring*
+
+Both theses share the SatelliteGraph technical foundation, including satellite image preprocessing, semantic segmentation, spatial graph construction, annual graph integration, and temporal correspondence.
+
+The research perspectives are complementary: Ahmad's thesis emphasizes graph-based representation and temporal unification, while Roaa's thesis focuses on graph neural networks and spatiotemporal change detection.
+
+The repository documents the shared implementation, experimental workflows, and reproducibility requirements supporting both theses.
 
 SatelliteGraph compares two dates of satellite imagery through selectable
 segmentation, spatial graph and change-detection methods. Start the thesis dashboard:
@@ -127,8 +143,11 @@ python -m pip install -r requirements.txt
 ```
 
 Edit `config.yaml` to configure project paths, both models, preprocessing,
-filtering, fusion, refinement, graph construction, visualization, and output. There is no
-separate per-stage configuration and no Streamlit application.
+filtering, fusion, refinement, graph construction, visualization, and output.
+There is no separate per-stage configuration file.
+
+The project includes a Streamlit thesis dashboard, accessible through
+`python -m streamlit run thesis_dashboard.py`.
 
 The configured model assets are local and are not downloaded while the pipeline
 runs:
@@ -526,7 +545,7 @@ The general pipeline supports all eight combinations of old/new segmentation, ol
 
 Run `python -m streamlit run thesis_dashboard.py` and open **Run pipelines & results** to choose methods, upload images or enter local paths/folders, inspect stages and download crop grids. Two PNGs need no placement metadata; tile folders use their placement metadata. New-input GNN fits are training only and remain separate from the frozen thesis evaluation.
 
-## Legacy building spatio-temporal GNN (optional)
+## Building Change Detection Using Spatio-Temporal Graph Neural Networks (ST-GNN)
 
 `python -m src legacy-building-gnn run --output artifacts/legacy_building_stgnn/<run>` reproduces the original 2013–2023 building-change GNN of the frozen 7-tile study exactly (unchanged code, leave-one-tile-out retraining) and regenerates its strip change map and per-tile prediction overlays, verified pixel-for-pixel against the frozen originals. It is separate from the multi-class pipeline; its scores are agreement with rule pseudo-labels, not independent accuracy. See [Legacy building ST-GNN](docs/legacy-building-stgnn.md).
 
